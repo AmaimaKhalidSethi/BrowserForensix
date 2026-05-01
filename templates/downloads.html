@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %} — Downloads{% endblock %}
+{% block page_title %}Downloads{% endblock %}
+
+{% block content %}
+
+<!-- Downloads are the artifact most tools skip. Often the most forensically significant. -->
+
+<div style="margin-bottom:14px;padding:9px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);font-size:11px;color:var(--text-secondary);">
+  Downloads prove a file was <strong style="color:var(--text-primary);">deliberately saved to disk</strong>.
+  Source URL, file path, timestamp, and disk presence are all extracted.
+  Files present in downloads but absent from history indicate private browsing or selective history clearing.
+</div>
+
+<!-- Filters -->
+<div class="bfx-filter-bar">
+  <span class="bfx-filter-label">Risk:</span>
+  <select class="bfx-filter-select" id="dlRiskFilter">
+    <option value="any">Any</option>
+    <option value="flagged">Flagged (≥ 61)</option>
+    <option value="moderate">Moderate (31–60)</option>
+    <option value="low">Low (0–30)</option>
+  </select>
+
+  <input type="text" class="bfx-filter-input" id="dlSearchInput"
+         placeholder="Search filename or source domain…" style="width:240px;margin-left:auto;">
+</div>
+
+<!-- Table -->
+<table class="bfx-table">
+  <thead>
+    <tr>
+      <th>Filename</th>
+      <th>Source Domain</th>
+      <th style="width:150px;">Downloaded</th>
+      <th style="width:80px;">Size</th>
+      <th style="width:80px;">In History?</th>
+      <th style="width:80px;">On Disk?</th>
+      <th style="width:56px;">Risk</th>
+    </tr>
+  </thead>
+  <tbody id="dlBody">
+    <tr><td colspan="7" class="bfx-loading">Loading downloads…</td></tr>
+  </tbody>
+</table>
+
+<!-- Pagination -->
+<div class="bfx-pagination">
+  <button class="bfx-page-btn" id="dlPrev" disabled onclick="dlPage(-1)">← Prev</button>
+  <span id="dlPageInfo">—</span>
+  <button class="bfx-page-btn" id="dlNext" onclick="dlPage(1)">Next →</button>
+  <span style="margin-left:auto;" id="dlTotal" class="muted"></span>
+</div>
+
+<!-- Risk legend -->
+<div style="margin-top:18px;" class="bfx-section">
+  <div class="bfx-section-title">Risk Scoring for Downloads</div>
+  <div style="font-size:11px;color:var(--text-secondary);line-height:2;">
+    <div><span class="bfx-risk-pill high" style="display:inline-block;min-width:36px;text-align:center;margin-right:8px;">+30</span> Source URL absent from history — possible private browsing or cleared history</div>
+    <div><span class="bfx-risk-pill high" style="display:inline-block;min-width:36px;text-align:center;margin-right:8px;">+20</span> Executable file type (.exe, .msi, .bat, .ps1, .sh, .dmg, .pkg…)</div>
+    <div><span class="bfx-risk-pill high" style="display:inline-block;min-width:36px;text-align:center;margin-right:8px;">+20</span> File no longer present at recorded path</div>
+    <div><span class="bfx-risk-pill moderate" style="display:inline-block;min-width:36px;text-align:center;margin-right:8px;">+20</span> Chrome flagged the download (danger_type &gt; 0)</div>
+    <div><span class="bfx-risk-pill moderate" style="display:inline-block;min-width:36px;text-align:center;margin-right:8px;">+10</span> Archive file type (.zip, .tar, .gz, .7z, .rar)</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('dlRiskFilter')?.addEventListener('change', e => {
+    dlState.risk = e.target.value;
+    loadDownloads(true);
+  });
+
+  let dlSearchDebounce;
+  document.getElementById('dlSearchInput')?.addEventListener('input', e => {
+    clearTimeout(dlSearchDebounce);
+    dlSearchDebounce = setTimeout(() => {
+      dlState.q = e.target.value.trim();
+      loadDownloads(true);
+    }, 280);
+  });
+
+  function dlPage(dir) {
+    dlState.page = Math.max(1, dlState.page + dir);
+    loadDownloads();
+  }
+
+  loadDownloads();
+</script>
+{% endblock %}

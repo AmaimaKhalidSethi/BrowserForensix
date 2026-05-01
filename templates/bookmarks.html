@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %} — Bookmarks{% endblock %}
+{% block page_title %}Bookmarks{% endblock %}
+
+{% block content %}
+
+<!-- Search bar -->
+<div class="bfx-filter-bar" style="margin-bottom:14px;">
+  <input type="text" class="bfx-filter-input" id="bmSearchInput"
+         placeholder="Search all folders…" style="width:240px;">
+  <span class="muted" style="font-size:11px;margin-left:8px;" id="bmCount"></span>
+</div>
+
+<!-- Deleted traces notice (shown if any exist) -->
+<div id="bmDeletedNotice" style="display:none;" class="bfx-anomaly-item" style="margin-bottom:14px;">
+  <div class="bfx-anomaly-type">Deleted Bookmark Traces Detected</div>
+  <div class="bfx-anomaly-text" id="bmDeletedNoticeText"></div>
+</div>
+
+<!-- Layout: folder tree + entries -->
+<div class="bfx-bookmark-layout">
+
+  <!-- Folder tree -->
+  <div class="bfx-folder-tree">
+    <div class="bfx-section-title">Folders</div>
+    <div class="bfx-folder-item active" data-folder="all" onclick="selectBmFolder(this)">
+      <span>▸</span> All Bookmarks
+    </div>
+    <div class="bfx-folder-item" data-folder="bookmark_bar" onclick="selectBmFolder(this)">
+      <span>▸</span> Bookmarks Bar
+    </div>
+    <div class="bfx-folder-item" data-folder="other" onclick="selectBmFolder(this)">
+      <span>▸</span> Other Bookmarks
+    </div>
+    <div class="bfx-folder-item" data-folder="synced" onclick="selectBmFolder(this)">
+      <span>▸</span> Synced
+    </div>
+    <div class="bfx-folder-item deleted" data-folder="deleted" onclick="selectBmFolder(this)" id="bmDeletedFolder" style="display:none;">
+      <span>!</span> <span id="bmDeletedFolderLabel">Deleted Traces</span>
+    </div>
+  </div>
+
+  <!-- Entries -->
+  <div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <div class="bfx-section-title" style="margin-bottom:0;border:none;">Entries</div>
+      <span class="muted" style="font-size:11px;">Sort by:</span>
+      <select class="bfx-filter-select" id="bmSortSelect">
+        <option value="date_desc">Date Added ↓</option>
+        <option value="date_asc">Date Added ↑</option>
+        <option value="title_asc">Title A–Z</option>
+      </select>
+    </div>
+    <div id="bmEntries">
+      <div class="bfx-loading">Loading bookmarks…</div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let bmCurrentFolder = 'all';
+  let bmSort = 'date_desc';
+
+  function selectBmFolder(el) {
+    document.querySelectorAll('.bfx-folder-item').forEach(f => f.classList.remove('active'));
+    el.classList.add('active');
+    bmCurrentFolder = el.dataset.folder;
+    renderBookmarkFolder(bmCurrentFolder);
+  }
+
+  document.getElementById('bmSortSelect')?.addEventListener('change', e => {
+    bmSort = e.target.value;
+    renderBookmarkFolder(bmCurrentFolder);
+  });
+
+  // Override renderBookmarkFolder to support sorting
+  const _origRender = renderBookmarkFolder;
+  window.renderBookmarkFolder = function(folder) {
+    if (!bmData) return;
+    let items = [];
+    if (folder === 'all') {
+      items = Object.values(bmData.tree || {}).flat();
+    } else if (folder === 'deleted') {
+      items = Object.values(bmData.tree || {}).flat()
+        .filter(b => b.url === 'about:blank' || b.deleted);
+    } else {
+      items = Object.entries(bmData.tree || {})
+        .filter(([k]) => k.toLowerCase().includes(folder.toLowerCase()))
+        .flatMap(([, v]) => v);
+    }
+
+    // Sort
+    if (bmSort === 'date_desc') items = [...items].sort((a,b) => (b.date_added||'').localeCompare(a.date_added||''));
+    else if (bmSort === 'date_asc') items = [...items].sort((a,b) => (a.date_added||'').localeCompare(b.date_added||''));
+    else if (bmSort === 'title_asc') items = [...items].sort((a,b) => (a.title||'').localeCompare(b.title||''));
+
+    const el = document.getElementById('bmEntries');
+    if (!el) return;
+    if (!items.length) {
+      el.innerHTML = '<div class="muted" style="padding:12px 0;font-size:12px;">No bookmarks in this folder.</div>';
+      return;
+    }
+
+    el.innerHTML = items.map(b => {
+      const isDeleted = b.url === 'about:blank' || b.deleted;
+      return `<div class="bfx-bm-row${isDeleted ? ' deleted' : ''}">
+        ${isDeleted ? '<span class="bfx-deleted-badge">DELETED</span>' : ''}
+        <div style="flex:1;min-width:0;">
+          <div class="bfx-bm-title">${esc(b.title || '[No title]')}</div>
+          <div class="bfx-bm-url mono">${esc(b.url)}</div>
+        </div>
+        <div class="bfx-bm-date mono">${fmtTime(b.date_added)}</div>
+      </div>`;
+    }).join('');
+  };
+
+  // Wire search
+  let bmSearchDebounce;
+  document.getElementById('bmSearchInput')?.addEventListener('input', async e => {
+    clearTimeout(bmSearchDebounce);
+    const q = e.target.value.trim();
+    if (!q) { renderBookmarkFolder(bmCurrentFolder); return; }
+    bmSearchDebounce = setTimeout(async () => {
+      const data = await API.get(`/api/bookmarks?q=${encodeURIComponent(q)}`);
+      const el = document.getElementById('bmEntries');
+      if (!el || !data) return;
+      const items = data.items || [];
+      document.getElementById('bmCount').textContent = `${items.length} result(s)`;
+      el.innerHTML = items.map(b => `<div class="bfx-bm-row">
+        <div style="flex:1;min-width:0;">
+          <div class="bfx-bm-title">${esc(b.title || '[No title]')}</div>
+          <div class="bfx-bm-url mono">${esc(b.url)}</div>
+        </div>
+        <div class="bfx-bm-date mono">${fmtTime(b.date_added)}</div>
+      </div>`).join('');
+    }, 280);
+  });
+
+  loadBookmarks().then(() => {
+    // Show deleted folder if any exist
+    if (!bmData) return;
+    const allItems = Object.values(bmData.tree || {}).flat();
+    const deleted = allItems.filter(b => b.url === 'about:blank' || b.deleted);
+    const total = allItems.length;
+    document.getElementById('bmCount').textContent = `${total} total`;
+    if (deleted.length) {
+      const folder = document.getElementById('bmDeletedFolder');
+      const notice = document.getElementById('bmDeletedNotice');
+      const label  = document.getElementById('bmDeletedFolderLabel');
+      const noticeText = document.getElementById('bmDeletedNoticeText');
+      if (folder) folder.style.display = '';
+      if (label) label.textContent = `Deleted Traces (${deleted.length})`;
+      if (notice) notice.style.display = '';
+      if (noticeText) noticeText.textContent =
+        `${deleted.length} deleted or blank-target bookmark entry(ies) detected. ` +
+        `Chrome's Bookmarks JSON retains structural artifacts when entries are removed. ` +
+        `These are surfaced here for forensic review.`;
+    }
+  });
+</script>
+{% endblock %}

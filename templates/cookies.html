@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %} — Cookies{% endblock %}
+{% block page_title %}Cookies{% endblock %}
+
+{% block content %}
+
+<!-- Filters -->
+<div class="bfx-filter-bar">
+  <span class="bfx-filter-label">Type:</span>
+  <select class="bfx-filter-select" id="cookieTypeFilter">
+    <option value="all">All Types</option>
+    <option value="auth token">Auth Token</option>
+    <option value="tracking">Tracking</option>
+    <option value="session">Session</option>
+    <option value="zombie">Zombie</option>
+    <option value="analytics">Analytics</option>
+    <option value="unknown">Unknown</option>
+  </select>
+
+  <span class="bfx-filter-label">Status:</span>
+  <select class="bfx-filter-select" id="cookieExpiredFilter">
+    <option value="all">All</option>
+    <option value="no">Active only</option>
+    <option value="yes">Expired (Zombie)</option>
+  </select>
+
+  <span class="bfx-filter-label">Secure:</span>
+  <select class="bfx-filter-select" id="cookieSecureFilter">
+    <option value="all">All</option>
+    <option value="secure">Secure</option>
+    <option value="insecure">Not Secure</option>
+  </select>
+
+  <input type="text" class="bfx-filter-input" id="cookieHostSearch" placeholder="Filter by host…" style="width:180px;margin-left:auto;">
+</div>
+
+<!-- Type legend -->
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+  <span class="bfx-cookie-type type-auth">Auth Token</span>
+  <span class="bfx-cookie-type type-tracking">Tracking</span>
+  <span class="bfx-cookie-type type-session">Session</span>
+  <span class="bfx-cookie-type type-zombie">Zombie</span>
+  <span class="bfx-cookie-type type-analytics">Analytics</span>
+  <span class="bfx-cookie-type type-unknown">Unknown</span>
+  <span style="font-size:10px;color:var(--text-secondary);margin-left:4px;align-self:center;">
+    Classification is heuristic — name patterns, flag combinations, scope, value length.
+  </span>
+</div>
+
+<!-- Table -->
+<table class="bfx-table">
+  <thead>
+    <tr>
+      <th>Host</th>
+      <th>Name</th>
+      <th style="width:90px;">Type</th>
+      <th style="width:140px;">Expiry</th>
+      <th style="width:140px;">Created</th>
+      <th>Flags</th>
+      <th style="width:56px;">Risk</th>
+    </tr>
+  </thead>
+  <tbody id="cookieBody">
+    <tr><td colspan="7" class="bfx-loading">Loading cookies…</td></tr>
+  </tbody>
+</table>
+
+<!-- Pagination -->
+<div class="bfx-pagination">
+  <button class="bfx-page-btn" id="cookiePrev" disabled onclick="cookiePage(-1)">← Prev</button>
+  <span id="cookiePageInfo">—</span>
+  <button class="bfx-page-btn" id="cookieNext" onclick="cookiePage(1)">Next →</button>
+  <span style="margin-left:auto;" id="cookieTotal" class="muted"></span>
+</div>
+
+<!-- Zombie note -->
+<div style="margin-top:16px;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);font-size:11px;color:var(--text-secondary);">
+  <strong style="color:var(--text-primary);">Note on cookie values:</strong>
+  Encrypted cookie values (DPAPI on Windows, Keychain on macOS) are shown as <span class="mono">[ENCRYPTED]</span>.
+  Raw decryption requires OS-level key access and is out of scope for this tool.
+  Value length and encryption status are shown to indicate the presence of tokens without exposing them.
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  ['cookieTypeFilter','cookieExpiredFilter'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      cookieState.type    = document.getElementById('cookieTypeFilter').value;
+      cookieState.expired = document.getElementById('cookieExpiredFilter').value;
+      loadCookies(true);
+    });
+  });
+
+  let cookieHostDebounce;
+  document.getElementById('cookieHostSearch')?.addEventListener('input', e => {
+    clearTimeout(cookieHostDebounce);
+    cookieHostDebounce = setTimeout(() => {
+      cookieState.host = e.target.value.trim();
+      loadCookies(true);
+    }, 280);
+  });
+
+  function cookiePage(dir) {
+    cookieState.page = Math.max(1, cookieState.page + dir);
+    loadCookies();
+  }
+
+  loadCookies();
+</script>
+{% endblock %}

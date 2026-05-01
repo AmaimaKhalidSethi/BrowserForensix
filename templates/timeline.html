@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %} — Timeline{% endblock %}
+{% block page_title %}Timeline{% endblock %}
+
+{% block content %}
+
+<!-- Range + type controls -->
+<div class="bfx-filter-bar">
+  <span class="bfx-filter-label">Range:</span>
+  <button class="bfx-btn outline sm" id="tlBtn24h" onclick="setTlRange('24h', this)">Last 24h</button>
+  <button class="bfx-btn outline sm" id="tlBtn7d"  onclick="setTlRange('7d', this)">Last 7d</button>
+  <button class="bfx-btn sm"         id="tlBtn30d" onclick="setTlRange('30d', this)">Last 30d</button>
+  <button class="bfx-btn outline sm" id="tlBtnAll" onclick="setTlRange('all', this)">All time</button>
+
+  <span class="bfx-filter-label" style="margin-left:12px;">Types:</span>
+  <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
+    <input type="checkbox" id="tlTypeHistory" checked> History
+  </label>
+  <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
+    <input type="checkbox" id="tlTypeCookies" checked> Cookies
+  </label>
+  <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
+    <input type="checkbox" id="tlTypeDownloads" checked> Downloads
+  </label>
+
+  <span style="margin-left:auto;" id="tlEventCount" class="muted" style="font-size:11px;"></span>
+</div>
+
+<!-- Colour key -->
+<div style="display:flex;gap:16px;margin-bottom:14px;font-size:11px;color:var(--text-secondary);">
+  <span style="display:flex;align-items:center;gap:5px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#8B6347;flex-shrink:0;"></span> History
+  </span>
+  <span style="display:flex;align-items:center;gap:5px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:#B8860B;flex-shrink:0;"></span> Cookie
+  </span>
+  <span style="display:flex;align-items:center;gap:5px;">
+    <span style="width:10px;height:10px;border-radius:50%;background:var(--accent-safe);flex-shrink:0;"></span> Download
+  </span>
+  <span style="display:flex;align-items:center;gap:5px;">
+    <span style="background:#FAE8C5;color:#8A5A0A;padding:1px 6px;border-radius:8px;font-size:9px;font-family:var(--font-mono);">OFF-HOURS</span>
+    Sessions outside user's normal activity window
+  </span>
+</div>
+
+<!-- Sessions rendered here -->
+<div id="timelineList">
+  <div class="bfx-loading">Building timeline…</div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function setTlRange(range, btn) {
+    tlRange = range;
+    document.querySelectorAll('[id^="tlBtn"]').forEach(b => {
+      b.className = b === btn ? 'bfx-btn sm' : 'bfx-btn outline sm';
+    });
+    loadTimeline();
+  }
+
+  ['tlTypeHistory','tlTypeCookies','tlTypeDownloads'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => loadTimeline());
+  });
+
+  // Override loadTimeline to respect type checkboxes
+  const _origLoad = loadTimeline;
+  window.loadTimeline = async function() {
+    const types = [];
+    if (document.getElementById('tlTypeHistory')?.checked) types.push('history');
+    if (document.getElementById('tlTypeCookies')?.checked) types.push('cookies');
+    if (document.getElementById('tlTypeDownloads')?.checked) types.push('downloads');
+
+    const ranges = { '24h': 1, '7d': 7, '30d': 30, 'all': 0 };
+    const days = ranges[tlRange] || 30;
+    let fromParam = '';
+    if (days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      fromParam = d.toISOString();
+    }
+    const params = new URLSearchParams({ from: fromParam, types: types.join(',') });
+    const data = await API.get(`/api/timeline?${params}`);
+    const el = document.getElementById('timelineList');
+    const countEl = document.getElementById('tlEventCount');
+    if (!el) return;
+
+    if (!data?.sessions?.length) {
+      el.innerHTML = '<div class="bfx-loading muted">No events in this time range.</div>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `${data.total.toLocaleString()} events · ${data.sessions.length} sessions`;
+
+    const dotClass = { history: 'dot-history', cookie: 'dot-cookie', download: 'dot-download', bookmark: 'dot-bookmark' };
+
+    el.innerHTML = data.sessions.map((s, si) => {
+      const start = fmtTime(s.start);
+      const isOffhours = s.events?.some(e => {
+        try { const h = new Date(e.time).getUTCHours(); return h >= 23 || h < 5; } catch { return false; }
+      });
+
+      const itemsHtml = (s.events || []).slice(0, 100).map(e => {
+        let text = '';
+        if (e.type === 'history') text = `<span class="mono" style="font-size:10px;">${esc(e.domain)}</span>${e.title ? ' — ' + esc(e.title.slice(0, 80)) : ''}`;
+        else if (e.type === 'cookie') text = `Cookie: <span class="mono">${esc(e.name)}</span> → ${esc(e.host || '')}`;
+        else if (e.type === 'download') text = `<strong>Download:</strong> <span class="mono">${esc(e.filename)}</span>`;
+        else text = esc(e.type);
+        const riskSpan = e.risk_score >= 61
+          ? `<span class="bfx-risk-pill high" style="float:right;margin-top:-1px;">${e.risk_score}</span>`
+          : '';
+        return `<div class="bfx-tl-item">
+          <div class="bfx-tl-dot ${dotClass[e.type] || 'dot-history'}"></div>
+          <div class="bfx-tl-time">${fmtTime(e.time).slice(11, 16)}</div>
+          <div class="bfx-tl-text">${riskSpan}${text}</div>
+        </div>`;
+      }).join('');
+
+      const truncNote = (s.events || []).length > 100
+        ? `<div style="padding:6px 14px;font-size:10px;color:var(--text-secondary);">… ${(s.events.length - 100)} more events not shown</div>`
+        : '';
+
+      return `<div class="bfx-session-block">
+        <div class="bfx-session-header" onclick="this.nextElementSibling.classList.toggle('open')">
+          <span class="bfx-session-label">Session ${data.sessions.length - si}</span>
+          <span class="bfx-session-time">${start}</span>
+          <span class="bfx-session-count">${s.count} events</span>
+          ${isOffhours ? '<span class="bfx-offhours-badge">OFF-HOURS</span>' : ''}
+          <span>▾</span>
+        </div>
+        <div class="bfx-session-items${si === 0 ? ' open' : ''}">${itemsHtml}${truncNote}</div>
+      </div>`;
+    }).join('');
+  };
+
+  loadTimeline();
+</script>
+{% endblock %}

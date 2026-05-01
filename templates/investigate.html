@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %} — Investigate{% endblock %}
+{% block page_title %}Investigate{% endblock %}
+
+{% block content %}
+
+<!-- Top two-column investigative tools -->
+<div class="bfx-two-col" style="margin-bottom:20px;">
+
+  <!-- Domain Inspector -->
+  <div class="bfx-invest-card">
+    <div class="bfx-invest-title">Domain Inspector</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">
+      Enter any domain to see every artifact associated with it — history, cookies, downloads, first/last seen, risk breakdown.
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input class="bfx-invest-input" type="text" id="domainInspectInput"
+             placeholder="e.g. filebin.net" style="margin-bottom:0;">
+      <button class="bfx-btn sm" onclick="inspectDomain()">Inspect</button>
+    </div>
+    <div id="domainInspectResult" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Cleared History Detector -->
+  <div class="bfx-invest-card">
+    <div class="bfx-invest-title">Cleared History Detector</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;">
+      Domains whose cookies survive but whose history entries are absent.
+      This pattern indicates selective or full history clearing.
+    </div>
+    <div id="gapDetectorContent">
+      <div class="bfx-loading">Analysing gaps…</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Session Viewer -->
+<div class="bfx-section">
+  <div class="bfx-section-title">Session Viewer — Reconstructed Browsing Sessions</div>
+  <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+    Sessions are reconstructed by grouping activity within 30-minute gaps.
+    Each session shows the sequence of URLs visited, cookies set, and files downloaded.
+  </div>
+  <div id="sessionViewer">
+    <div class="bfx-loading">Reconstructing sessions…</div>
+  </div>
+</div>
+
+<!-- Artifact Cross-Reference -->
+<div class="bfx-section">
+  <div class="bfx-section-title">Artifact Cross-Reference</div>
+  <div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px;">
+    Compare two domains — shared cookie scope, co-occurrence in sessions, temporal proximity.
+  </div>
+  <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:12px;">
+    <div>
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px;">Domain A</div>
+      <input class="bfx-invest-input" type="text" id="xrefA" placeholder="domain-a.com" style="width:180px;margin-bottom:0;">
+    </div>
+    <div>
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);margin-bottom:4px;">Domain B</div>
+      <input class="bfx-invest-input" type="text" id="xrefB" placeholder="domain-b.com" style="width:180px;margin-bottom:0;">
+    </div>
+    <button class="bfx-btn sm" onclick="runCrossRef()">Compare</button>
+  </div>
+  <div id="xrefResult"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('domainInspectInput')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') inspectDomain();
+  });
+
+  async function runCrossRef() {
+    const a = document.getElementById('xrefA')?.value.trim();
+    const b = document.getElementById('xrefB')?.value.trim();
+    const el = document.getElementById('xrefResult');
+    if (!a || !b || !el) return;
+    el.innerHTML = '<div class="bfx-loading">Fetching data for both domains…</div>';
+
+    const [dataA, dataB] = await Promise.all([
+      API.get(`/api/domain/${encodeURIComponent(a)}`),
+      API.get(`/api/domain/${encodeURIComponent(b)}`),
+    ]);
+
+    if (!dataA || !dataB) {
+      el.innerHTML = '<div class="bfx-error">Could not fetch data for one or both domains.</div>';
+      return;
+    }
+
+    // Check shared cookie scope
+    const cookieHostsA = new Set((dataA.cookies || []).map(c => c.host.replace(/^\./,'')));
+    const cookieHostsB = new Set((dataB.cookies || []).map(c => c.host.replace(/^\./,'')));
+    const sharedHosts = [...cookieHostsA].filter(h => cookieHostsB.has(h));
+
+    // Temporal proximity: last seen of each
+    const lastA = dataA.last_seen || '';
+    const lastB = dataB.last_seen || '';
+    let proxNote = '—';
+    if (lastA && lastB) {
+      const diff = Math.abs(new Date(lastA) - new Date(lastB)) / 1000;
+      if (diff < 300) proxNote = `Last visits within ${Math.round(diff)}s of each other — likely same session`;
+      else if (diff < 1800) proxNote = `Last visits ${Math.round(diff / 60)} min apart`;
+      else proxNote = `Last visits more than 30 min apart — likely different sessions`;
+    }
+
+    el.innerHTML = `<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;font-size:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain A — ${esc(a)}</div>
+          <div>Visits: <strong>${dataA.total_visits || 0}</strong></div>
+          <div>Cookies: <strong>${(dataA.cookies || []).length}</strong></div>
+          <div>Risk: <span style="color:${riskColor(dataA.max_risk_score)};font-weight:bold;">${dataA.max_risk_score}</span></div>
+          <div>Last seen: <span class="mono" style="font-size:10px;">${fmtTime(dataA.last_seen) || '—'}</span></div>
+        </div>
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain B — ${esc(b)}</div>
+          <div>Visits: <strong>${dataB.total_visits || 0}</strong></div>
+          <div>Cookies: <strong>${(dataB.cookies || []).length}</strong></div>
+          <div>Risk: <span style="color:${riskColor(dataB.max_risk_score)};font-weight:bold;">${dataB.max_risk_score}</span></div>
+          <div>Last seen: <span class="mono" style="font-size:10px;">${fmtTime(dataB.last_seen) || '—'}</span></div>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:10px;">
+        <div style="margin-bottom:4px;"><strong>Shared cookie scope:</strong> ${sharedHosts.length ? sharedHosts.map(esc).join(', ') : 'None detected'}</div>
+        <div><strong>Temporal proximity:</strong> ${esc(proxNote)}</div>
+      </div>
+    </div>`;
+  }
+
+  loadInvestigate();
+  loadGapDetector();
+</script>
+{% endblock %}

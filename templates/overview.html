@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %} — Overview{% endblock %}
+{% block page_title %}Overview{% endblock %}
+
+{% block content %}
+<div id="overviewContent">
+
+  <!-- Stat Cards -->
+  <div class="bfx-stat-grid">
+    <div class="bfx-stat-card">
+      <div class="bfx-stat-label">Total Artifacts</div>
+      <div class="bfx-stat-value" id="statArtifacts">—</div>
+      <div class="bfx-stat-sub" id="statBrowserMeta">Loading…</div>
+    </div>
+    <div class="bfx-stat-card">
+      <div class="bfx-stat-label">Flagged Items</div>
+      <div class="bfx-stat-value danger" id="statFlagged">—</div>
+      <div class="bfx-stat-sub">risk score ≥ 61</div>
+    </div>
+    <div class="bfx-stat-card">
+      <div class="bfx-stat-label">Avg Risk Score</div>
+      <div class="bfx-stat-value" id="statRisk">—</div>
+      <div class="bfx-stat-sub">across all artifacts</div>
+    </div>
+    <div class="bfx-stat-card">
+      <div class="bfx-stat-label">Anomalies</div>
+      <div class="bfx-stat-value" id="statAnomalies">—</div>
+      <div class="bfx-stat-sub">detected patterns</div>
+    </div>
+  </div>
+
+  <!-- Anomalies -->
+  <div class="bfx-section">
+    <div class="bfx-section-title">Detected Anomalies</div>
+    <div id="anomalyList">
+      <div class="bfx-loading">Loading anomalies…</div>
+    </div>
+  </div>
+
+  <!-- Two-column: domains + heatmap -->
+  <div class="bfx-two-col">
+    <div class="bfx-section">
+      <div class="bfx-section-title">Top Domains by Visits</div>
+      <div id="domainList">
+        <div class="bfx-loading">Loading…</div>
+      </div>
+    </div>
+    <div class="bfx-section">
+      <div class="bfx-section-title">Activity Heatmap — visits by hour of day</div>
+      <div id="activityHeatmap">
+        <div class="bfx-loading">Building heatmap…</div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;font-size:9px;color:var(--text-secondary);align-items:center;">
+        <span>Low</span>
+        <span style="display:flex;gap:2px;">
+          <span style="width:10px;height:10px;background:#EAD9C4;border-radius:2px;display:inline-block;"></span>
+          <span style="width:10px;height:10px;background:#C9A882;border-radius:2px;display:inline-block;"></span>
+          <span style="width:10px;height:10px;background:#A47E64;border-radius:2px;display:inline-block;"></span>
+          <span style="width:10px;height:10px;background:#7A5C44;border-radius:2px;display:inline-block;"></span>
+          <span style="width:10px;height:10px;background:#B7410E;border-radius:2px;display:inline-block;"></span>
+        </span>
+        <span>High</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Evidence Integrity -->
+  <div class="bfx-section">
+    <div class="bfx-section-title">Evidence Integrity — Source File Hashes</div>
+    <div id="evidenceMeta">
+      <div class="bfx-loading">Loading…</div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  loadOverview();
+</script>
+{% endblock %}

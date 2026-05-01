@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrowserForensix{% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="bfx-app">
+
+  <!-- Sidebar -->
+  <aside class="bfx-sidebar">
+    <div class="bfx-logo">
+      <div class="bfx-logo-title">BrowserForensix</div>
+      <div class="bfx-logo-sub">Forensic Analysis Platform</div>
+    </div>
+
+    <nav class="bfx-nav">
+      <a class="bfx-nav-item {% if active == 'overview' %}active{% endif %}"
+         data-page="overview" href="/">
+        <span class="bfx-nav-icon">◈</span>
+        <span class="bfx-nav-label">Overview</span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'history' %}active{% endif %}"
+         data-page="history" href="/history">
+        <span class="bfx-nav-icon">⊞</span>
+        <span class="bfx-nav-label">History</span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'cookies' %}active{% endif %}"
+         data-page="cookies" href="/cookies">
+        <span class="bfx-nav-icon">◻</span>
+        <span class="bfx-nav-label">Cookies</span>
+        <span class="bfx-nav-badge" id="cookieBadge" style="display:none;"></span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'bookmarks' %}active{% endif %}"
+         data-page="bookmarks" href="/bookmarks">
+        <span class="bfx-nav-icon">◇</span>
+        <span class="bfx-nav-label">Bookmarks</span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'downloads' %}active{% endif %}"
+         data-page="downloads" href="/downloads">
+        <span class="bfx-nav-icon">▽</span>
+        <span class="bfx-nav-label">Downloads</span>
+        <span class="bfx-nav-badge" id="dlBadge" style="display:none;"></span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'timeline' %}active{% endif %}"
+         data-page="timeline" href="/timeline">
+        <span class="bfx-nav-icon">⊟</span>
+        <span class="bfx-nav-label">Timeline</span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'investigate' %}active{% endif %}"
+         data-page="investigate" href="/investigate">
+        <span class="bfx-nav-icon">⊕</span>
+        <span class="bfx-nav-label">Investigate</span>
+      </a>
+      <a class="bfx-nav-item {% if active == 'report' %}active{% endif %}"
+         data-page="report" href="/report">
+        <span class="bfx-nav-icon">◑</span>
+        <span class="bfx-nav-label">Report</span>
+      </a>
+    </nav>
+
+    <div class="bfx-status-bar" id="bfxStatusBar">
+      <span class="bfx-status-dot"></span>
+      <span class="mono">Loading…</span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="bfx-main">
+
+    <!-- Topbar -->
+    <div class="bfx-topbar">
+      <div class="bfx-topbar-title" id="bfxPageTitle">{% block page_title %}{% endblock %}</div>
+      <span class="bfx-topbar-meta" id="bfxTopbarMeta"></span>
+      <input class="bfx-search" type="text" id="globalSearch" placeholder="Search all artifacts…">
+    </div>
+
+    <!-- Search Overlay -->
+    <div id="searchOverlay" style="
+      display:none;
+      position:absolute;
+      top:44px;
+      right:20px;
+      width:420px;
+      background:var(--bg-surface);
+      border:1px solid var(--border-strong);
+      border-radius:var(--radius-lg);
+      box-shadow:0 4px 20px rgba(0,0,0,0.12);
+      padding:14px 16px;
+      z-index:100;
+      max-height:480px;
+      overflow-y:auto;
+    ">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span style="font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-secondary);">Search Results</span>
+        <button onclick="closeSearch()" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;">×</button>
+      </div>
+      <div id="searchResults"></div>
+    </div>
+
+    <!-- Content -->
+    <main class="bfx-content">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+
+<script>
+  // Update topbar meta from status API
+  fetch('/api/status').then(r => r.json()).then(data => {
+    const metaEl = document.getElementById('bfxTopbarMeta');
+    const statusEl = document.getElementById('bfxStatusBar');
+    if (!data.ready) {
+      if (statusEl) statusEl.innerHTML = '<span class="bfx-status-dot error"></span><span class="mono" style="font-size:10px;">Run extract.py first</span>';
+      return;
+    }
+    const m = data.meta || {};
+    const exTime = (m.extraction_time || '').replace('T', ' ').slice(0, 19) + 'Z';
+    if (metaEl) metaEl.textContent = `Extracted: ${exTime} · SHA256: ${Object.values(data.hashes || {})[0]?.slice(0, 8) || '—'}…`;
+    if (statusEl) statusEl.innerHTML = `<span class="bfx-status-dot"></span><span class="mono" style="font-size:10px;">${m.browser || 'Chrome'} · ${(data.summary?.total_artifacts || 0).toLocaleString()} artifacts</span>`;
+
+    // Update nav badges
+    const s = data.summary || {};
+    if (s.flagged_count) {
+      const dlBadge = document.getElementById('dlBadge');
+      if (dlBadge) { dlBadge.textContent = s.flagged_count; dlBadge.style.display = ''; }
+    }
+  }).catch(() => {});
+</script>
+</body>
+</html>

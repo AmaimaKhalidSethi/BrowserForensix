@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %} — History{% endblock %}
+{% block page_title %}History{% endblock %}
+
+{% block content %}
+
+<!-- Filters -->
+<div class="bfx-filter-bar">
+  <span class="bfx-filter-label">Protocol:</span>
+  <select class="bfx-filter-select" id="histProtoFilter">
+    <option value="all">All</option>
+    <option value="https">HTTPS</option>
+    <option value="http">HTTP</option>
+  </select>
+
+  <span class="bfx-filter-label">Risk:</span>
+  <select class="bfx-filter-select" id="histRiskFilter">
+    <option value="any">Any</option>
+    <option value="flagged">Flagged (≥ 61)</option>
+    <option value="moderate">Moderate (31–60)</option>
+    <option value="low">Low (0–30)</option>
+  </select>
+
+  <span class="bfx-filter-label">From:</span>
+  <input type="date" class="bfx-filter-select" id="histFromFilter">
+
+  <span class="bfx-filter-label">To:</span>
+  <input type="date" class="bfx-filter-select" id="histToFilter">
+
+  <input type="text" class="bfx-filter-input" id="histSearchInput" placeholder="Search URL or title…" style="width:200px;">
+
+  <button class="bfx-btn outline sm" onclick="exportHistoryCsv()" style="margin-left:auto;">Export CSV</button>
+</div>
+
+<!-- Table -->
+<table class="bfx-table">
+  <thead>
+    <tr>
+      <th style="width:60px;">Risk</th>
+      <th style="width:64px;">Proto</th>
+      <th>Domain / Title</th>
+      <th style="width:150px;">Last Visit</th>
+      <th style="width:60px;">Visits</th>
+    </tr>
+  </thead>
+  <tbody id="histBody">
+    <tr><td colspan="5" class="bfx-loading">Loading history…</td></tr>
+  </tbody>
+</table>
+
+<!-- Pagination -->
+<div class="bfx-pagination">
+  <button class="bfx-page-btn" id="histPrev" disabled onclick="histPage(-1)">← Prev</button>
+  <span id="histPageInfo">—</span>
+  <button class="bfx-page-btn" id="histNext" onclick="histPage(1)">Next →</button>
+  <span style="margin-left:auto;" id="histTotal" class="muted"></span>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Wire filters
+  ['histProtoFilter','histRiskFilter','histFromFilter','histToFilter'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      histState.protocol = document.getElementById('histProtoFilter').value;
+      histState.risk     = document.getElementById('histRiskFilter').value;
+      histState.from     = document.getElementById('histFromFilter').value;
+      histState.to       = document.getElementById('histToFilter').value;
+      loadHistory(true);
+    });
+  });
+
+  let histSearchDebounce;
+  document.getElementById('histSearchInput')?.addEventListener('input', e => {
+    clearTimeout(histSearchDebounce);
+    histSearchDebounce = setTimeout(() => {
+      histState.q = e.target.value.trim();
+      loadHistory(true);
+    }, 280);
+  });
+
+  function histPage(dir) {
+    histState.page = Math.max(1, histState.page + dir);
+    loadHistory();
+  }
+
+  function exportHistoryCsv() {
+    const rows = [['risk_score','protocol','domain','title','last_visit','visit_count']];
+    document.querySelectorAll('#histBody tr:not(#histExpandRow)').forEach(tr => {
+      const cells = tr.querySelectorAll('td');
+      if (cells.length < 5) return;
+      rows.push([
+        cells[0].textContent.trim(),
+        cells[1].textContent.trim(),
+        cells[2].querySelector('div')?.textContent.trim() || '',
+        cells[2].querySelectorAll('div')[1]?.textContent.trim() || '',
+        cells[3].textContent.trim(),
+        cells[4].textContent.trim(),
+      ]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'browserforensix-history.csv';
+    a.click();
+  }
+
+  loadHistory();
+</script>
+{% endblock %}

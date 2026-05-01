@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %} — Report{% endblock %}
+{% block page_title %}Report Generator{% endblock %}
+
+{% block content %}
+
+<div class="bfx-two-col">
+
+  <!-- Left: metadata + controls -->
+  <div>
+    <div class="bfx-section-title">Case Metadata</div>
+
+    <div class="bfx-report-field">
+      <label>Case Number</label>
+      <input type="text" id="rptCase" placeholder="e.g. BFX-2024-0047">
+    </div>
+    <div class="bfx-report-field">
+      <label>Examiner Name</label>
+      <input type="text" id="rptExaminer" placeholder="e.g. J. Halloran, GCFE">
+    </div>
+    <div class="bfx-report-field">
+      <label>Acquisition Date</label>
+      <input type="date" id="rptDate">
+    </div>
+    <div class="bfx-report-field">
+      <label>Notes</label>
+      <input type="text" id="rptNotes" placeholder="Optional — additional context or scope">
+    </div>
+
+    <button class="bfx-btn" style="width:100%;margin-top:4px;" onclick="generateReport()">
+      Generate Report
+    </button>
+    <button class="bfx-btn outline" style="width:100%;margin-top:8px;" onclick="downloadReport()">
+      Download .txt
+    </button>
+
+    <div style="margin-top:18px;" class="bfx-section">
+      <div class="bfx-section-title">What's Included</div>
+      <div style="font-size:11px;color:var(--text-secondary);line-height:2;">
+        <div>✓ Case metadata (number, examiner, date)</div>
+        <div>✓ Executive summary (artifact counts, top finding)</div>
+        <div>✓ Evidence integrity — SHA-256 hashes, extraction timestamp</div>
+        <div>✓ All flagged items with full forensic reason strings</div>
+        <div>✓ All detected anomalies with supporting data</div>
+        <div>✓ Plain .txt output for inclusion in formal reports</div>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);font-size:11px;color:var(--text-secondary);">
+      <strong style="color:var(--text-primary);">Limitation note:</strong>
+      This report covers artifacts from a single browser profile.
+      Cookie decryption (DPAPI/Keychain), network traffic, mobile browsers,
+      and cross-user comparison are out of scope.
+    </div>
+  </div>
+
+  <!-- Right: preview -->
+  <div style="display:flex;flex-direction:column;">
+    <div class="bfx-section-title">Report Preview</div>
+    <div class="bfx-report-preview" id="reportPreview" style="flex:1;min-height:420px;">Press "Generate Report" to build the forensic report from current analysis data.</div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Set today's date as default acquisition date
+  const dateInput = document.getElementById('rptDate');
+  if (dateInput) dateInput.value = new Date().toISOString().slice(0, 10);
+
+  // Override generateReport to include notes field
+  const _origGen = generateReport;
+  window.generateReport = async function() {
+    const notes = document.getElementById('rptNotes')?.value || '';
+    await _origGen();
+    // Append notes if provided
+    if (notes) {
+      const prev = document.getElementById('reportPreview');
+      if (prev && window._bfxReport) {
+        window._bfxReport = window._bfxReport.replace(
+          'EVIDENCE INTEGRITY',
+          `EXAMINER NOTES\n--------------\n${notes}\n\nEVIDENCE INTEGRITY`
+        );
+        prev.textContent = window._bfxReport;
+      }
+    }
+  };
+</script>
+{% endblock %}
