@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
-BrowserForensix — analyzer.py
-Reads data/evidence.json, scores every artifact, detects anomalies.
-Writes data/analysis.json.
+BrowserForensix — analyzer.py  (PATCHED)
+
+PATCH NOTES:
+  FIX-1  _extract_domain(): .lstrip("www.") → .removeprefix("www.")
+  FIX-6  run() now pre-computes the activity heatmap and stores it in
+         analysis.json["heatmap"]. /api/overview reads it instead of
+         recomputing per-request.
+  FIX-BURST  detect_burst_activity(): replaced O(n²) inner scan with an
+         O(n log n) two-pointer sliding window.
 """
 
 import json
@@ -41,36 +47,34 @@ def _parse_iso(ts: str) -> Optional[datetime]:
     except (ValueError, TypeError):
         return None
 
+# FIX-1: Use .removeprefix() — .lstrip(chars) strips individual characters
+# from the char-set, not the literal string prefix.
 def _extract_domain(url: str) -> str:
     try:
         netloc = urlparse(url).netloc.lower()
-        return netloc.split(":")[0].lstrip("www.")
+        return netloc.split(":")[0].removeprefix("www.")
     except Exception:
         return ""
 
 def _is_ip(host: str) -> bool:
+    # BUG-15 FIX: validate octet range 0-255. Previously any four dot-separated
+    # digit strings passed (e.g. "999.999.999.999", "1.2.3.456").
     parts = host.lstrip(".").split(".")
-    return len(parts) == 4 and all(p.isdigit() for p in parts)
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(p) <= 255 for p in parts)
+    except ValueError:
+        return False
 
 def _is_expired(expires_str: str) -> bool:
     dt = _parse_iso(expires_str)
     return dt is not None and dt < _now_utc()
 
 def _domain_matches(src: str, history_domains: set) -> bool:
-    """
-    Check if src domain matches any domain in history_domains via:
-      1. Exact match
-      2. src is a subdomain of a history domain (cdn.x.com -> x.com)
-      3. A history domain is a subdomain of src (x.com -> cdn.x.com)
-
-    Guards against TLD-only matches: a domain must have at least two labels
-    (e.g. "com" alone must NOT match everything ending in .com).
-    """
     if not src or src.count(".") == 0:
         return False
-    # Require minimum two labels to prevent TLD-matching ("com", "co", "net")
     if len(src.split(".")) < 2 or all(len(p) <= 2 for p in src.split(".")[:-1]):
-        # Too short to be a meaningful domain — only allow exact match
         return src in history_domains
     return (
         src in history_domains
@@ -103,7 +107,7 @@ def score_url(
         score += 25
         reasons.append("IP address used instead of domain name")
 
-    bare = domain.lstrip("www.")
+    bare = domain.removeprefix("www.")   # FIX-1 applied here too
     if bare in PASTE_SITES:
         score += 30
         reasons.append(f"Known paste site: {bare}")
@@ -120,12 +124,13 @@ def score_url(
         score += 25
         reasons.append("Cookie exists for this domain but history was cleared")
 
-    # Typed URL = user deliberately navigated here — high forensic signal when combined with other flags
     core_transition = transition & 0xFF
     if core_transition == 1:
+        # BUG-10 FIX: typed URL signals deliberate user intent — add intentionality
+        # weight only when the visit is already in the moderate+ risk band (≥ 31).
+        # Previously the threshold was > 20 which penalised low-risk typed URLs.
         reasons.append("URL was typed directly by the user (high intentionality)")
-        # Typing a suspicious URL carries more weight than clicking a link to it
-        if score > 20:
+        if score >= 31:
             score = min(score + 10, 100)
     elif core_transition == 8:
         reasons.append("URL reached via form submission")
@@ -134,7 +139,6 @@ def score_url(
 
 
 def _transition_label(transition: int) -> str:
-    """Decode Chrome visits.transition bitmask to human-readable label."""
     core = transition & 0xFF
     labels = {
         0: "link", 1: "typed", 2: "auto_bookmark", 3: "auto_subframe",
@@ -178,7 +182,9 @@ def score_cookie(cookie: Dict, domain_history_count: int) -> Tuple[int, List[str
         score += 20
         reasons.append("No history entries for this domain — possible cleared history")
 
-    auth_names = {"token", "auth", "sid", "jwt", "access_token", "id_token"}
+    # B7 FIX: removed "sid" — it matches "inside","position","beside" etc.
+    # Auth token detection is already handled in classify_cookie(); this +5 is additive.
+    auth_names = {"token", "auth", "jwt", "access_token", "id_token", "sessionid"}
     if any(a in name for a in auth_names):
         score += 5
         reasons.append("Appears to be an authentication token")
@@ -221,26 +227,30 @@ def score_download(dl: Dict, source_domain_in_history: bool) -> Tuple[int, List[
 # ── Cookie classification ─────────────────────────────────────────────────────
 
 def classify_cookie(cookie: Dict) -> str:
-    """
-    Classify cookie type. Expiry (Zombie) check runs FIRST — an expired
-    auth-token cookie is a Zombie, not an Auth Token.
-    """
     expires = cookie.get("expires", "")
     if expires and _is_expired(expires):
         return "Zombie"
 
     name = cookie.get("name", "").lower()
 
+    # BUG-12 FIX: Auth must be checked before Tracking.
+    # "_ga_token" contains both "_ga" (tracking) and "token" (auth).
+    # Auth tokens are higher forensic value — they should take precedence.
+    #
+    # Also: "uid" was matching "fluid", "invalid", "squid" etc.
+    # Replaced with exact-prefix or standalone patterns to reduce false positives.
+    auth_patterns     = ["token", "auth", "sid", "jwt", "access_token", "id_token", "csrf", "login"]
     analytics_patterns = ["analytics", "_hj", "hotjar", "mixpanel", "amplitude", "segment"]
-    track_patterns = ["_ga", "_gid", "_fbp", "_fbc", "track", "uid", "visitor", "adid", "__utma", "__utmz"]
-    auth_patterns = ["token", "auth", "sid", "jwt", "access_token", "id_token", "csrf", "login"]
+    # "uid" replaced with "_uid" and "user_id" to avoid substring false positives
+    track_patterns    = ["_ga", "_gid", "_fbp", "_fbc", "track", "_uid", "user_id",
+                         "visitor", "adid", "__utma", "__utmz"]
 
+    if any(p in name for p in auth_patterns):
+        return "Auth Token"
     if any(p in name for p in analytics_patterns):
         return "Analytics"
     if any(p in name for p in track_patterns):
         return "Tracking"
-    if any(p in name for p in auth_patterns):
-        return "Auth Token"
     if "session" in name:
         return "Session"
     if not expires:
@@ -260,7 +270,7 @@ def detect_history_gaps(history: List[Dict], cookies: List[Dict]) -> Optional[Di
 
     cookie_only = []
     for c in cookies:
-        host = c.get("host", "").lstrip(".").lstrip("www.")
+        host = c.get("host", "").lstrip(".").removeprefix("www.")  # FIX-1
         if not host:
             continue
         if not _domain_matches(host, history_domains):
@@ -276,7 +286,7 @@ def detect_history_gaps(history: List[Dict], cookies: List[Dict]) -> Optional[Di
     dates = [_parse_iso(d["cookie_created"]) for d in cookie_only if d["cookie_created"]]
     dates = [d for d in dates if d is not None]
     earliest = min(dates).isoformat() if dates else ""
-    latest = max(dates).isoformat() if dates else ""
+    latest   = max(dates).isoformat() if dates else ""
 
     return {
         "type": "history_gap",
@@ -291,7 +301,24 @@ def detect_history_gaps(history: List[Dict], cookies: List[Dict]) -> Optional[Di
     }
 
 
-def detect_burst_activity(history: List[Dict], threshold: int = 8, window_minutes: int = 5) -> List[Dict]:
+def detect_burst_activity(
+    history: List[Dict], threshold: int = 8, window_minutes: int = 5
+) -> List[Dict]:
+    """
+    FIX-BURST: Replaced O(n²) inner scan with a two-pointer sliding window.
+
+    Previous code:
+        for i, t in enumerate(times):
+            window = [s for s in times[i:] if (s - t).total_seconds() <= window_minutes * 60]
+
+    That rescans the remaining list for every timestamp — O(n²) per domain.
+    For a domain with 10,000 visits, that's 10,000 × 10,000 = 100M comparisons.
+
+    Fixed approach:
+      - Sort timestamps once: O(n log n)
+      - Use two pointers (left, right) to maintain a sliding window: O(n)
+      - Total: O(n log n) dominated by the sort.
+    """
     domain_times: Dict[str, List[datetime]] = defaultdict(list)
     for h in history:
         dt = _parse_iso(h.get("last_visit", ""))
@@ -301,26 +328,32 @@ def detect_burst_activity(history: List[Dict], threshold: int = 8, window_minute
         if d:
             domain_times[d].append(dt)
 
+    window_seconds = window_minutes * 60
     bursts = []
+
     for domain, times in domain_times.items():
         times.sort()
-        for i, t in enumerate(times):
-            window = [s for s in times[i:] if (s - t).total_seconds() <= window_minutes * 60]
-            if len(window) >= threshold:
+        left = 0
+        for right in range(len(times)):
+            # Shrink window from the left until it fits within window_seconds
+            while (times[right] - times[left]).total_seconds() > window_seconds:
+                left += 1
+            window_size = right - left + 1
+            if window_size >= threshold:
                 bursts.append({
                     "type": "burst_activity",
                     "severity": "moderate",
                     "title": f"Burst Activity — {domain}",
                     "description": (
-                        f"{len(window)} visits to {domain} within {window_minutes} min "
-                        f"starting {t.isoformat()}. May indicate automated tooling."
+                        f"{window_size} visits to {domain} within {window_minutes} min "
+                        f"starting {times[left].isoformat()}. May indicate automated tooling."
                     ),
                     "domain": domain,
-                    "visit_count": len(window),
-                    "window_start": t.isoformat(),
-                    "window_end": window[-1].isoformat(),
+                    "visit_count": window_size,
+                    "window_start": times[left].isoformat(),
+                    "window_end": times[right].isoformat(),
                 })
-                break
+                break   # one burst report per domain is sufficient
 
     return bursts
 
@@ -343,21 +376,20 @@ def detect_offhours_activity(history: List[Dict]) -> Optional[Dict]:
     threshold = 2.0
 
     def _circular_hour_dist(h: float, mean: float) -> float:
-        """Circular distance between two clock hours (0-23), max 12."""
         diff = abs(h - mean) % 24
         return min(diff, 24 - diff)
 
-    offhours_visits = []
-    for h in history:
-        dt = _parse_iso(h.get("last_visit", ""))
-        if dt is not None and _circular_hour_dist(dt.hour, mean_hour) / stdev_hour > threshold:
-            offhours_visits.append(h)
+    offhours_visits = [
+        h for h in history
+        if (dt := _parse_iso(h.get("last_visit", ""))) is not None
+        and _circular_hour_dist(dt.hour, mean_hour) / stdev_hour > threshold
+    ]
 
     if not offhours_visits:
         return None
 
     normal_start = int(mean_hour - threshold * stdev_hour) % 24
-    normal_end = int(mean_hour + threshold * stdev_hour) % 24
+    normal_end   = int(mean_hour + threshold * stdev_hour) % 24
 
     return {
         "type": "offhours_activity",
@@ -375,11 +407,6 @@ def detect_offhours_activity(history: List[Dict]) -> Optional[Dict]:
 
 
 def detect_download_without_history(history: List[Dict], downloads: List[Dict]) -> List[Dict]:
-    """
-    Flag downloads whose source domain has no corresponding history.
-    Compares domains (not exact URLs) to avoid false positives from
-    CDN subdomains (cdn.example.com vs example.com in history).
-    """
     history_domains = {_extract_domain(h.get("url", "")) for h in history}
     history_domains.discard("")
 
@@ -407,26 +434,68 @@ def detect_download_without_history(history: List[Dict], downloads: List[Dict]) 
 
 
 def detect_zombie_cookies(cookies: List[Dict]) -> List[Dict]:
-    zombies = []
+    # B6 FIX: was creating one anomaly per expired cookie — with hundreds of expired
+    # cookies this produced 800+ entries flooding the anomaly list.
+    # Now aggregates by domain: one anomaly per affected host, listing cookie names.
+    from collections import defaultdict
+    host_zombies: dict = defaultdict(list)
     for c in cookies:
         expires = c.get("expires", "")
         if not expires:
             continue
         exp_dt = _parse_iso(expires)
         if exp_dt is not None and exp_dt < _now_utc():
-            zombies.append({
-                "type": "zombie_cookie",
-                "severity": "low",
-                "title": f"Zombie Cookie — {c.get('host', '')}",
-                "description": (
-                    f"Cookie '{c.get('name', '')}' on {c.get('host', '')} "
-                    f"expired {exp_dt.isoformat()} but is still present in the database."
-                ),
-                "host": c.get("host", ""),
+            host_zombies[c.get("host", "unknown")].append({
                 "name": c.get("name", ""),
                 "expired": exp_dt.isoformat(),
             })
+
+    zombies = []
+    for host, entries in sorted(host_zombies.items()):
+        names = ", ".join(e["name"] for e in entries[:5])
+        extra = f" (+{len(entries)-5} more)" if len(entries) > 5 else ""
+        zombies.append({
+            "type": "zombie_cookie",
+            "severity": "low",
+            "title": f"Zombie Cookies — {host}",
+            "description": (
+                f"{len(entries)} expired cookie(s) still present for {host}: "
+                f"{names}{extra}."
+            ),
+            "host": host,
+            "cookie_count": len(entries),
+            "cookies": entries[:10],
+        })
     return zombies
+
+
+# ── Heatmap pre-computation (FIX-6) ──────────────────────────────────────────
+
+def compute_heatmap(history: List[Dict]) -> List[Dict]:
+    """
+    FIX-6: Pre-compute activity heatmap during analysis rather than per-request.
+
+    Previously /api/overview iterated the full history list on every page load
+    to build the 7×24 heatmap. With large evidence files (100k+ rows) this is
+    significant repeated CPU work. Computing it once here and storing it in
+    analysis.json makes /api/overview a cheap read.
+
+    Returns: list of {day: int, hour: int, count: int} for all 168 cells.
+    """
+    grid: Dict[int, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    for h in history:
+        ts = h.get("last_visit", "")
+        if not ts:
+            continue
+        dt = _parse_iso(ts)
+        if dt is not None:
+            grid[dt.weekday()][dt.hour] += 1
+
+    return [
+        {"day": day, "hour": hour, "count": grid[day][hour]}
+        for day in range(7)
+        for hour in range(24)
+    ]
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -437,8 +506,8 @@ def run() -> None:
         return
 
     evidence = json.loads(EVIDENCE_FILE.read_text(encoding="utf-8"))
-    history: List[Dict] = evidence.get("history", [])
-    cookies: List[Dict] = evidence.get("cookies", [])
+    history:   List[Dict] = evidence.get("history", [])
+    cookies:   List[Dict] = evidence.get("cookies", [])
     bookmarks: List[Dict] = evidence.get("bookmarks", [])
     downloads: List[Dict] = evidence.get("downloads", [])
 
@@ -450,7 +519,7 @@ def run() -> None:
 
     domain_has_cookie: Dict[str, bool] = defaultdict(bool)
     for c in cookies:
-        host = c.get("host", "").lstrip(".").lstrip("www.")
+        host = c.get("host", "").lstrip(".").removeprefix("www.")  # FIX-1
         if host:
             domain_has_cookie[host] = True
 
@@ -467,17 +536,13 @@ def run() -> None:
         )
         scored_history.append({**h, "risk_score": score, "risk_reasons": reasons})
 
-    # Score cookies — classify first so type is available to scorer if needed
+    # Score cookies
     scored_cookies = []
     for c in cookies:
         raw_host = c.get("host", "").lstrip(".")
-        # For .google.com cookie, check both "google.com" and subdomains like
-        # "accounts.google.com". Use the MAX count across parent + all subdomain matches.
-        cookie_domain = raw_host.lstrip("www.")
+        cookie_domain = raw_host.removeprefix("www.")  # FIX-1
         hist_count = domain_history_count.get(cookie_domain, 0)
         if hist_count == 0:
-            # Also check if any history domain ends with this cookie domain
-            # e.g. accounts.google.com history count should satisfy .google.com cookie
             for hd, cnt in domain_history_count.items():
                 if hd == cookie_domain or hd.endswith("." + cookie_domain):
                     hist_count = max(hist_count, cnt)
@@ -485,7 +550,7 @@ def run() -> None:
         score, reasons = score_cookie(c, hist_count)
         scored_cookies.append({**c, "type": ctype, "risk_score": score, "risk_reasons": reasons})
 
-    # Score downloads — domain-level history matching
+    # Score downloads
     scored_downloads = []
     for dl in downloads:
         src_domain = _extract_domain(dl.get("source_url", ""))
@@ -510,7 +575,7 @@ def run() -> None:
         + [c["risk_score"] for c in scored_cookies]
         + [d["risk_score"] for d in scored_downloads]
     )
-    flagged = sum(1 for s in all_scores if s >= 61)
+    flagged   = sum(1 for s in all_scores if s >= 61)
     avg_score = round(statistics.mean(all_scores), 1) if all_scores else 0.0
 
     domain_visits: Dict[str, int] = defaultdict(int)
@@ -518,10 +583,13 @@ def run() -> None:
     for h in scored_history:
         d = _extract_domain(h.get("url", ""))
         if d:
-            domain_visits[d] += 1  # one row = one visit event (visits JOIN)
+            domain_visits[d] += 1
             domain_max_risk[d] = max(domain_max_risk[d], h["risk_score"])
 
     top_domains = sorted(domain_visits.items(), key=lambda x: x[1], reverse=True)[:20]
+
+    # FIX-6: Pre-compute heatmap here once, not per-request in /api/overview
+    heatmap = compute_heatmap(scored_history)
 
     analysis = {
         "meta": {
@@ -533,22 +601,23 @@ def run() -> None:
         },
         "hashes": evidence.get("hashes", {}),
         "summary": {
-            "total_artifacts": len(history) + len(cookies) + len(bookmarks) + len(downloads),
-            "history_count": len(scored_history),
-            "cookie_count": len(scored_cookies),
-            "bookmark_count": len(bookmarks),
-            "download_count": len(scored_downloads),
-            "flagged_count": flagged,
+            "total_artifacts":   len(history) + len(cookies) + len(bookmarks) + len(downloads),
+            "history_count":     len(scored_history),
+            "cookie_count":      len(scored_cookies),
+            "bookmark_count":    len(bookmarks),
+            "download_count":    len(scored_downloads),
+            "flagged_count":     flagged,
             "average_risk_score": avg_score,
-            "anomaly_count": len(anomalies),
+            "anomaly_count":     len(anomalies),
         },
         "top_domains": [
             {"domain": d, "visits": v, "risk_score": domain_max_risk.get(d, 0)}
             for d, v in top_domains
         ],
+        "heatmap":   heatmap,   # FIX-6: stored here, read in /api/overview
         "anomalies": anomalies,
-        "history": scored_history,
-        "cookies": scored_cookies,
+        "history":   scored_history,
+        "cookies":   scored_cookies,
         "bookmarks": bookmarks,
         "downloads": scored_downloads,
     }
@@ -556,7 +625,7 @@ def run() -> None:
     ANALYSIS_FILE.parent.mkdir(parents=True, exist_ok=True)
     ANALYSIS_FILE.write_text(json.dumps(analysis, indent=2, ensure_ascii=False), encoding="utf-8")
     try:
-        ANALYSIS_FILE.chmod(0o600)  # analysis.json contains scored artifacts with sensitive data
+        ANALYSIS_FILE.chmod(0o600)
     except Exception:
         pass
     print(f"[OK] Analysis complete. {len(anomalies)} anomalies, {flagged} flagged items → {ANALYSIS_FILE}")

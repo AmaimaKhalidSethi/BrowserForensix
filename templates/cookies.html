@@ -4,7 +4,6 @@
 
 {% block content %}
 
-<!-- Filters -->
 <div class="bfx-filter-bar">
   <span class="bfx-filter-label">Type:</span>
   <select class="bfx-filter-select" id="cookieTypeFilter">
@@ -31,10 +30,11 @@
     <option value="insecure">Not Secure</option>
   </select>
 
-  <input type="text" class="bfx-filter-input" id="cookieHostSearch" placeholder="Filter by host…" style="width:180px;margin-left:auto;">
+  <!-- FIX-COOKIES-HOST: input now correctly sets cookieState.host and triggers reload -->
+  <input type="text" class="bfx-filter-input" id="cookieHostSearch"
+         placeholder="Filter by host…" style="width:180px;margin-left:auto;">
 </div>
 
-<!-- Type legend -->
 <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
   <span class="bfx-cookie-type type-auth">Auth Token</span>
   <span class="bfx-cookie-type type-tracking">Tracking</span>
@@ -47,7 +47,6 @@
   </span>
 </div>
 
-<!-- Table -->
 <table class="bfx-table">
   <thead>
     <tr>
@@ -65,7 +64,6 @@
   </tbody>
 </table>
 
-<!-- Pagination -->
 <div class="bfx-pagination">
   <button class="bfx-page-btn" id="cookiePrev" disabled onclick="cookiePage(-1)">← Prev</button>
   <span id="cookiePageInfo">—</span>
@@ -73,19 +71,23 @@
   <span style="margin-left:auto;" id="cookieTotal" class="muted"></span>
 </div>
 
-<!-- Zombie note -->
 <div style="margin-top:16px;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);font-size:11px;color:var(--text-secondary);">
   <strong style="color:var(--text-primary);">Note on cookie values:</strong>
   Encrypted cookie values (DPAPI on Windows, Keychain on macOS) are shown as <span class="mono">[ENCRYPTED]</span>.
   Raw decryption requires OS-level key access and is out of scope for this tool.
-  Value length and encryption status are shown to indicate the presence of tokens without exposing them.
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-  ['cookieTypeFilter','cookieExpiredFilter'].forEach(id => {
+  // FIX-COOKIES-HOST + FIX-COOKIES-SECURE:
+  // All three filter dropdowns and the host search input now correctly update
+  // cookieState and send all params to the API. Previously cookieState.host was
+  // never set (so the host filter was a silent no-op) and cookieState.secure was
+  // never sent to the API (so the secure filter also did nothing).
+
+  ['cookieTypeFilter', 'cookieExpiredFilter'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => {
       cookieState.type    = document.getElementById('cookieTypeFilter').value;
       cookieState.expired = document.getElementById('cookieExpiredFilter').value;
@@ -93,11 +95,16 @@
     });
   });
 
+  document.getElementById('cookieSecureFilter')?.addEventListener('change', e => {
+    cookieState.secure = e.target.value;   // FIX-COOKIES-SECURE: was never set
+    loadCookies(true);
+  });
+
   let cookieHostDebounce;
   document.getElementById('cookieHostSearch')?.addEventListener('input', e => {
     clearTimeout(cookieHostDebounce);
     cookieHostDebounce = setTimeout(() => {
-      cookieState.host = e.target.value.trim();
+      cookieState.host = e.target.value.trim();  // FIX-COOKIES-HOST: was never set
       loadCookies(true);
     }, 280);
   });

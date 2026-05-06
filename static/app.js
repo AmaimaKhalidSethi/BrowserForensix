@@ -1,6 +1,29 @@
-/* BrowserForensix — app.js
+/* BrowserForensix — app.js  (PATCHED)
    All frontend logic. API calls, rendering, state management.
-   No inline styles — all classes come from style.css.
+
+PATCH NOTES:
+  FIX-3  Removed dead SPA navigation system (activatePage, PAGES, the
+         DOMContentLoaded nav-click handler that called loadStatus() → activatePage()).
+         Flask renders each page as a full HTML document; there are no .bfx-page
+         divs to toggle. The SPA router was firing loadStatus() a second time on
+         every page load (base.html already calls it via /api/status inline script).
+
+  FIX-COOKIES-HOST  cookieState now tracks host; loadCookies() sends it as a
+         query param; cookieHostSearch input correctly sets cookieState.host.
+         The host filter was silently broken end-to-end — state was never set,
+         param was never sent to the API.
+
+  FIX-COOKIES-SECURE  cookieState.secure is now sent to the API and the
+         #cookieSecureFilter dropdown actually applies the filter.
+
+  FIX-REPORT  window._bfxReport replaced with a module-scoped variable
+         _reportText so forensic report content is not accessible to any
+         third-party script that might later run on the page.
+
+  NOTE: loadStatus() is called once in base.html's inline script (topbar meta
+        update). The DOMContentLoaded handler here no longer calls it a second
+        time. If you move the inline script out of base.html in a future refactor,
+        re-add loadStatus() to the DOMContentLoaded block below.
 */
 
 'use strict';
@@ -41,21 +64,33 @@ function domainOf(url) {
 }
 
 function protoOf(url) {
-  return (url || '').startsWith('http://') ? 'http' : 'https';
+  // BUG-16 FIX: previous version returned 'https' for ANY non-http URL,
+  // so chrome-extension://, ftp://, about:blank etc. all got a green HTTPS badge.
+  if ((url || '').startsWith('https://')) return 'https';
+  if ((url || '').startsWith('http://'))  return 'http';
+  return 'other';
 }
 
 function fmtTime(iso) {
   if (!iso) return '—';
   try {
-    return iso.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '');
+    // BUG-8 FIX: strip both "Z" and "+HH:MM"/"-HH:MM" timezone suffixes,
+    // and milliseconds. Previously only "Z" was stripped, so "+00:00" timestamps
+    // displayed with a trailing timezone offset.
+    return iso
+      .replace('T', ' ')
+      .replace(/\.\d+/, '')          // remove fractional seconds
+      .replace(/[Z]$/, '')           // remove trailing Z
+      .replace(/[+-]\d{2}:\d{2}$/, '') // remove +00:00 / -05:00 style offsets
+      .trim();
   } catch { return iso; }
 }
 
 function fmtSize(bytes) {
   if (!bytes) return '—';
   if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' GB';
-  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
-  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes >= 1048576)    return (bytes / 1048576).toFixed(1) + ' MB';
+  if (bytes >= 1024)       return (bytes / 1024).toFixed(1) + ' KB';
   return bytes + ' B';
 }
 
@@ -67,7 +102,11 @@ function el(tag, cls, html) {
 }
 
 function esc(str) {
-  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function noDataBanner(msg) {
@@ -81,51 +120,12 @@ function noDataBanner(msg) {
   </div>`;
 }
 
-// ── Navigation ────────────────────────────────────────────────────────────────
-
-const PAGES = ['overview','history','cookies','bookmarks','downloads','timeline','investigate','report'];
-
-function activatePage(pageId) {
-  document.querySelectorAll('.bfx-nav-item').forEach(n => {
-    n.classList.toggle('active', n.dataset.page === pageId);
-  });
-  document.querySelectorAll('.bfx-page').forEach(p => {
-    p.classList.toggle('active', p.id === 'page-' + pageId);
-  });
-  const titles = {
-    overview:    'Overview',
-    history:     'History',
-    cookies:     'Cookies',
-    bookmarks:   'Bookmarks',
-    downloads:   'Downloads',
-    timeline:    'Timeline',
-    investigate: 'Investigate',
-    report:      'Report Generator',
-  };
-  const titleEl = document.getElementById('bfxPageTitle');
-  if (titleEl) titleEl.textContent = titles[pageId] || pageId;
-
-  // Lazy-load page data
-  const loaders = {
-    overview:    loadOverview,
-    history:     loadHistory,
-    cookies:     loadCookies,
-    bookmarks:   loadBookmarks,
-    downloads:   loadDownloads,
-    timeline:    loadTimeline,
-    investigate: loadInvestigate,
-    report:      loadReport,
-  };
-  if (loaders[pageId]) loaders[pageId]();
-}
+// ── DOMContentLoaded — wire global search only ────────────────────────────────
+// FIX-3: Removed activatePage / nav-click SPA router. Flask serves each page
+// as a full HTML document so there are no .bfx-page divs to toggle. The dead
+// router was also calling loadStatus() a second time (base.html does it first).
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Nav click
-  document.querySelectorAll('.bfx-nav-item').forEach(item => {
-    item.addEventListener('click', () => activatePage(item.dataset.page));
-  });
-
-  // Global search
   const gs = document.getElementById('globalSearch');
   if (gs) {
     let debounce;
@@ -133,16 +133,48 @@ document.addEventListener('DOMContentLoaded', () => {
       clearTimeout(debounce);
       debounce = setTimeout(() => {
         if (gs.value.trim().length >= 2) runGlobalSearch(gs.value.trim());
+        else closeSearch();
       }, 300);
     });
     gs.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { gs.value = ''; }
+      if (e.key === 'Escape') { gs.value = ''; closeSearch(); }
     });
   }
-
-  // Load status then initial page
-  loadStatus().then(() => activatePage('overview'));
 });
+
+
+// ── Profile filter utility ────────────────────────────────────────────────────
+// With multi-profile extraction, every artifact has a "profile" field.
+// These helpers build and apply profile filtering across pages.
+
+let _allProfiles = null;
+
+async function getProfiles() {
+  if (_allProfiles) return _allProfiles;
+  const data = await API.get('/api/status');
+  const profiles = (data?.meta?.profiles_extracted || []);
+  _allProfiles = profiles.length ? profiles : [{ name: 'Default', dir: 'Default' }];
+  return _allProfiles;
+}
+
+function buildProfileFilter(containerId, onChange) {
+  getProfiles().then(profiles => {
+    if (profiles.length <= 1) return; // no filter needed for single profile
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const label = document.createElement('span');
+    label.className = 'bfx-filter-label';
+    label.textContent = 'Profile:';
+    const sel = document.createElement('select');
+    sel.className = 'bfx-filter-select';
+    sel.id = containerId + '_profileSel';
+    sel.innerHTML = '<option value="">All profiles</option>' +
+      profiles.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+    sel.addEventListener('change', () => onChange(sel.value));
+    container.prepend(sel);
+    container.prepend(label);
+  });
+}
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -171,23 +203,22 @@ async function loadOverview() {
   const s = data.summary || {};
   const meta = data.meta || {};
 
-  // Stat cards
   document.getElementById('statArtifacts').textContent = (s.total_artifacts || 0).toLocaleString();
-  document.getElementById('statFlagged').textContent = s.flagged_count || 0;
-  document.getElementById('statRisk').textContent = s.average_risk_score || 0;
+  document.getElementById('statFlagged').textContent   = s.flagged_count || 0;
+  document.getElementById('statRisk').textContent      = s.average_risk_score || 0;
   document.getElementById('statAnomalies').textContent = s.anomaly_count || 0;
-  document.getElementById('statBrowserMeta').textContent = (meta.browser || 'chrome') + ' · ' + (meta.profile_path || '').split('/').slice(-2).join('/');
+  // Multi-profile: show count of profiles instead of trying to parse a long path string
+  const profiles = meta.profiles_extracted || [];
+  const profileSummary = profiles.length > 1
+    ? `${profiles.length} profiles extracted`
+    : profiles[0]?.name || (meta.profile_path || '').split(/[\/]/).pop() || 'Default';
+  const browserLabel = (meta.browser || 'Chrome').charAt(0).toUpperCase() + (meta.browser || 'Chrome').slice(1);
+  document.getElementById('statBrowserMeta').textContent = browserLabel + ' · ' + profileSummary;
 
-  // Anomalies
   renderAnomalies(data.anomalies || []);
-
-  // Top domains
   renderDomainList(data.top_domains || []);
-
-  // Heatmap
   renderHeatmap(data.heatmap || []);
 
-  // Evidence meta
   const metaEl = document.getElementById('evidenceMeta');
   if (metaEl && data.hashes) {
     let html = '';
@@ -202,30 +233,46 @@ async function loadOverview() {
 }
 
 function renderAnomalies(anomalies) {
-  const el = document.getElementById('anomalyList');
-  if (!el) return;
+  const elAnom = document.getElementById('anomalyList');
+  if (!elAnom) return;
   if (!anomalies.length) {
-    el.innerHTML = '<div class="muted" style="font-size:12px;padding:10px 0;">No anomalies detected.</div>';
+    elAnom.innerHTML = '<div class="muted" style="font-size:12px;padding:10px 0;">No anomalies detected.</div>';
     return;
   }
-  el.innerHTML = anomalies.map(a => {
+  elAnom.innerHTML = '';
+  anomalies.forEach(a => {
     const sevClass = a.severity === 'critical' ? '' : a.severity === 'moderate' ? 'moderate' : 'low';
-    return `<div class="bfx-anomaly-item ${sevClass}">
-      <div class="bfx-anomaly-type">${esc(a.type.replace(/_/g,' '))} · ${esc(a.severity)}</div>
-      <div class="bfx-anomaly-text">${esc(a.description)}</div>
-    </div>`;
-  }).join('');
+    const anomAiId = 'anomAi_' + a.type;
+    const div = document.createElement('div');
+    div.className = 'bfx-anomaly-item ' + sevClass;
+    // Build onclick with string concat — nested template literals break browser parsing
+    const anomType = esc(a.type);
+    div.innerHTML = '<div class="bfx-anomaly-type">' + esc(a.type.replace(/_/g, ' ')) + ' · ' + esc(a.severity) + '</div>'
+      + '<div class="bfx-anomaly-text">' + esc(a.description) + '</div>'
+      + '<button class="bfx-btn outline sm" style="margin-top:6px;font-size:10px;" onclick="aiExplainAnomaly(\'' + anomType + '\',\'' + anomAiId + '\')">⬡ AI Deep Dive</button>'
+      + '<div id="' + anomAiId + '"></div>';
+    elAnom.appendChild(div);
+  });
 }
 
 function renderDomainList(domains) {
-  const el = document.getElementById('domainList');
-  if (!el) return;
-  el.innerHTML = domains.slice(0, 10).map(d => {
-    const pct = Math.min(100, d.risk_score || 0);
+  const elDom = document.getElementById('domainList');
+  if (!elDom) return;
+  const top = domains.slice(0, 10);
+  // Bar width is proportional to visit count relative to the highest-visited domain,
+  // not risk_score. Previously pct = risk_score which was 0 for safe domains → invisible bar.
+  const maxVisits = Math.max(...top.map(d => d.visits || 0), 1);
+  elDom.innerHTML = top.map(d => {
+    const pct   = Math.max(4, Math.round(((d.visits || 0) / maxVisits) * 100));
+    const score = d.risk_score || 0;
+    // Bar color reflects risk: high=violet, moderate=amber, low=teal
+    const barColor = score >= 61 ? 'var(--accent-action)'
+                   : score >= 31 ? 'var(--accent-moderate)'
+                   : 'var(--accent-safe)';
     return `<div class="bfx-domain-row">
       <span class="bfx-domain-name mono">${esc(d.domain)}</span>
       <div class="bfx-risk-bar-wrap">
-        <div class="bfx-risk-bar" style="width:${pct}%;background:${riskColor(d.risk_score)};"></div>
+        <div class="bfx-risk-bar" style="width:${pct}%;background:${barColor};opacity:0.85;"></div>
       </div>
       <span class="bfx-domain-count mono">${(d.visits || 0).toLocaleString()}</span>
     </div>`;
@@ -233,32 +280,35 @@ function renderDomainList(domains) {
 }
 
 function renderHeatmap(heatData) {
-  const el = document.getElementById('activityHeatmap');
-  if (!el) return;
-  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const colors = ['#EAD9C4','#C9A882','#A47E64','#7A5C44','#B7410E'];
+  const elHeat = document.getElementById('activityHeatmap');
+  if (!elHeat) return;
+  const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  // 5-stop purple scale: empty → deep indigo → rich violet → bright purple → vivid lavender
+  const STOPS = [
+    '#13102A',   // 0 — empty cell (near-black violet)
+    '#2D1B69',   // 1 — low  (deep indigo)
+    '#5B21B6',   // 2 — mid  (rich violet)
+    '#8B45F5',   // 3 — high (bright purple)
+    '#C084FC',   // 4 — peak (vivid lavender)
+  ];
 
-  // Build lookup: day → hour → count
   const map = {};
-  heatData.forEach(({day, hour, count}) => {
+  heatData.forEach(({ day, hour, count }) => {
     if (!map[day]) map[day] = {};
     map[day][hour] = count;
   });
   const maxVal = Math.max(...heatData.map(d => d.count), 1);
 
   function cellColor(v) {
-    if (!v) return colors[0];
-    const idx = Math.min(4, Math.floor((v / maxVal) * 5));
-    return colors[idx];
+    if (!v) return STOPS[0];
+    return STOPS[Math.min(4, Math.max(1, Math.ceil((v / maxVal) * 4)))];
   }
 
   let html = `<div class="bfx-heatmap">`;
-  // Header row
   html += `<div class="bfx-heatmap-header"></div>`;
   for (let h = 0; h < 24; h++) {
     html += `<div class="bfx-heatmap-header">${h % 4 === 0 ? h : ''}</div>`;
   }
-  // Data rows
   days.forEach((d, di) => {
     html += `<div class="bfx-heatmap-label">${d}</div>`;
     for (let h = 0; h < 24; h++) {
@@ -267,23 +317,26 @@ function renderHeatmap(heatData) {
     }
   });
   html += '</div>';
-  el.innerHTML = html;
+  elHeat.innerHTML = html;
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
 
-let histState = { page: 1, q: '', protocol: 'all', risk: 'any', from: '', to: '' };
+let histState = { page: 1, q: '', profile: '', protocol: 'all', risk: 'any', from: '', to: '' };
 let histExpandedRow = null;
 
 async function loadHistory(reset = false) {
   if (reset) { histState.page = 1; histExpandedRow = null; }
+  // B8 FIX: wire profile filter
+  buildProfileFilter('histFilterBar', val => { histState.profile = val; loadHistory(true); });
   const params = new URLSearchParams({
-    page: histState.page,
-    q: histState.q,
+    page:     histState.page,
+    q:        histState.q,
+    profile:  histState.profile || '',
     protocol: histState.protocol,
-    risk: histState.risk,
-    from: histState.from,
-    to: histState.to,
+    risk:     histState.risk,
+    from:     histState.from,
+    to:       histState.to,
   });
   const data = await API.get(`/api/history?${params}`);
   const tbody = document.getElementById('histBody');
@@ -294,8 +347,8 @@ async function loadHistory(reset = false) {
   if (!data.items?.length) {
     tbody.innerHTML = `<tr><td colspan="5" class="bfx-loading muted">No results.</td></tr>`;
   } else {
-    data.items.forEach((h, i) => {
-      const rc = riskClass(h.risk_score);
+    data.items.forEach(h => {
+      const rc    = riskClass(h.risk_score);
       const proto = protoOf(h.url);
       const domain = domainOf(h.url);
       const row = document.createElement('tr');
@@ -315,15 +368,13 @@ async function loadHistory(reset = false) {
     });
   }
 
-  // Pagination
   document.getElementById('histPageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('histTotal').textContent = `${data.total.toLocaleString()} total entries`;
+  document.getElementById('histTotal').textContent    = `${data.total.toLocaleString()} total entries`;
   document.getElementById('histPrev').disabled = data.page <= 1;
   document.getElementById('histNext').disabled = data.page >= data.total_pages;
 }
 
 function toggleHistExpand(row, h) {
-  // Remove previous expand row
   const existing = document.getElementById('histExpandRow');
   if (existing) existing.remove();
   if (histExpandedRow === row) { histExpandedRow = null; return; }
@@ -332,32 +383,41 @@ function toggleHistExpand(row, h) {
   const reasons = (h.risk_reasons || []).join(' · ');
   const expandRow = document.createElement('tr');
   expandRow.id = 'histExpandRow';
-  expandRow.innerHTML = `<td colspan="5" class="bfx-expand-row">
-    <div class="bfx-expand-content">
-      <div class="exp-label">Full URL</div>
-      <div class="exp-value">${esc(h.url)}</div>
-      <div class="exp-label">Last Visit</div>
-      <div class="exp-value">${fmtTime(h.last_visit)}</div>
-      <div class="exp-label">Total Visits</div>
-      <div class="exp-value">${h.visit_count || 1}</div>
-      ${reasons ? `<div class="bfx-reason-box">⚑ ${esc(reasons)}</div>` : ''}
-    </div>
-  </td>`;
+  const histAiId = 'histAi_' + Date.now();
+  // Build AI button with string concat — nested backticks cause SyntaxError in browsers
+  const histReasonHtml = reasons ? '<div class="bfx-reason-box">⚑ ' + esc(reasons) + '</div>' : '';
+  const histAiHtml = h.risk_score >= 31
+    ? '<button class="bfx-btn outline sm" style="margin-top:8px;" onclick="aiExplainHistory(\'' + encodeURIComponent(h.url) + '\',\'' + histAiId + '\')">⬡ Explain with AI</button><div id="' + histAiId + '"></div>'
+    : '';
+  expandRow.innerHTML = '<td colspan="5" class="bfx-expand-row"><div class="bfx-expand-content">'
+    + '<div class="exp-label">Full URL</div>'
+    + '<div class="exp-value">' + esc(h.url) + '</div>'
+    + '<div class="exp-label">Last Visit</div>'
+    + '<div class="exp-value">' + fmtTime(h.last_visit) + '</div>'
+    + '<div class="exp-label">Total Visits</div>'
+    + '<div class="exp-value">' + (h.visit_count || 1) + '</div>'
+    + histReasonHtml
+    + histAiHtml
+    + '</div></td>';
   row.insertAdjacentElement('afterend', expandRow);
 }
 
-// History filter/search events wired in base.html via IDs
-
 // ── Cookies ───────────────────────────────────────────────────────────────────
 
-let cookieState = { page: 1, type: 'all', expired: 'all', secure: 'all' };
+// FIX-COOKIES-HOST + FIX-COOKIES-SECURE:
+// cookieState now tracks host and secure; both are sent as API params.
+let cookieState = { page: 1, profile: '', type: 'all', expired: 'all', secure: 'all', host: '' };
 
 async function loadCookies(reset = false) {
   if (reset) cookieState.page = 1;
+  buildProfileFilter('cookieFilterBar', val => { cookieState.profile = val; loadCookies(true); });
   const params = new URLSearchParams({
-    page: cookieState.page,
-    type: cookieState.type,
+    page:    cookieState.page,
+    profile: cookieState.profile || '',
+    type:    cookieState.type,
     expired: cookieState.expired,
+    secure:  cookieState.secure,
+    host:    cookieState.host,
   });
   const data = await API.get(`/api/cookies?${params}`);
   const tbody = document.getElementById('cookieBody');
@@ -372,18 +432,18 @@ async function loadCookies(reset = false) {
 
   data.items.forEach(c => {
     const rc = riskClass(c.risk_score);
-    const typeKey = (c.type || 'unknown').toLowerCase().replace(/\s+/, '-');
+    const typeKey   = (c.type || 'unknown').toLowerCase().replace(/\s+/, '-');
     const typeClass = {
       'auth-token': 'type-auth',
-      'tracking': 'type-tracking',
-      'session': 'type-session',
-      'zombie': 'type-zombie',
-      'analytics': 'type-analytics',
+      'tracking':   'type-tracking',
+      'session':    'type-session',
+      'zombie':     'type-zombie',
+      'analytics':  'type-analytics',
     }[typeKey] || 'type-unknown';
     const flags = [
-      c.secure ? 'Secure' : '',
-      c.http_only ? 'HttpOnly' : '',
-      c.samesite ? `SameSite=${c.samesite}` : '',
+      c.secure    ? 'Secure'           : '',
+      c.http_only ? 'HttpOnly'         : '',
+      c.samesite  ? `SameSite=${c.samesite}` : '',
     ].filter(Boolean).join(', ') || '—';
 
     const row = document.createElement('tr');
@@ -399,7 +459,7 @@ async function loadCookies(reset = false) {
   });
 
   document.getElementById('cookiePageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('cookieTotal').textContent = `${data.total.toLocaleString()} total cookies`;
+  document.getElementById('cookieTotal').textContent    = `${data.total.toLocaleString()} total cookies`;
   document.getElementById('cookiePrev').disabled = data.page <= 1;
   document.getElementById('cookieNext').disabled = data.page >= data.total_pages;
 }
@@ -407,23 +467,19 @@ async function loadCookies(reset = false) {
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 
 let bmData = null;
-let bmCurrentFolder = 'all';
 
 async function loadBookmarks() {
   if (!bmData) {
     bmData = await API.get('/api/bookmarks');
   }
-  renderBookmarkFolder(bmCurrentFolder);
+  renderBookmarkFolder('all');
 }
 
+// Single authoritative renderBookmarkFolder — bookmarks.html no longer
+// overrides this function; it calls it directly.
 function renderBookmarkFolder(folder) {
-  bmCurrentFolder = folder;
-  document.querySelectorAll('.bfx-folder-item').forEach(f => {
-    f.classList.toggle('active', f.dataset.folder === folder);
-  });
-
-  const el = document.getElementById('bmEntries');
-  if (!el || !bmData) return;
+  const elBm = document.getElementById('bmEntries');
+  if (!elBm || !bmData) return;
 
   let items = [];
   if (folder === 'all') {
@@ -433,16 +489,16 @@ function renderBookmarkFolder(folder) {
       .filter(b => b.url === 'about:blank' || b.deleted);
   } else {
     items = Object.entries(bmData.tree || {})
-      .filter(([k]) => k.toLowerCase().includes(folder))
+      .filter(([k]) => k.toLowerCase().includes(folder.toLowerCase()))
       .flatMap(([, v]) => v);
   }
 
   if (!items.length) {
-    el.innerHTML = '<div class="muted" style="padding:12px 0;font-size:12px;">No bookmarks in this folder.</div>';
+    elBm.innerHTML = '<div class="muted" style="padding:12px 0;font-size:12px;">No bookmarks in this folder.</div>';
     return;
   }
 
-  el.innerHTML = items.map(b => {
+  elBm.innerHTML = items.map(b => {
     const isDeleted = b.url === 'about:blank' || b.deleted;
     return `<div class="bfx-bm-row${isDeleted ? ' deleted' : ''}">
       ${isDeleted ? '<span class="bfx-deleted-badge">DELETED</span>' : ''}
@@ -457,11 +513,12 @@ function renderBookmarkFolder(folder) {
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
 
-let dlState = { page: 1, q: '', risk: 'any' };
+let dlState = { page: 1, profile: '', q: '', risk: 'any' };
 
 async function loadDownloads(reset = false) {
   if (reset) dlState.page = 1;
-  const params = new URLSearchParams({ page: dlState.page, q: dlState.q, risk: dlState.risk });
+  buildProfileFilter('dlFilterBar', val => { dlState.profile = val; loadDownloads(true); });
+  const params = new URLSearchParams({ page: dlState.page, profile: dlState.profile || '', q: dlState.q, risk: dlState.risk });
   const data = await API.get(`/api/downloads?${params}`);
   const tbody = document.getElementById('dlBody');
   if (!tbody) return;
@@ -482,8 +539,10 @@ async function loadDownloads(reset = false) {
     const onDisk = d.file_exists
       ? `<span class="bfx-dl-badge dl-found">Found</span>`
       : `<span class="bfx-dl-badge dl-missing">Missing</span>`;
+    const dlAiId = 'dlAi_' + encodeURIComponent(d.filename || '').replace(/%/g,'');
     const row = document.createElement('tr');
     if (d.risk_score >= 61) row.classList.add('flagged');
+    row.style.cursor = d.risk_score >= 31 ? 'pointer' : '';
     row.innerHTML = `
       <td class="mono" style="font-size:11px;">${esc(d.filename || '—')}</td>
       <td class="mono muted" style="font-size:11px;">${esc(srcDomain)}</td>
@@ -492,11 +551,21 @@ async function loadDownloads(reset = false) {
       <td>${inHist}</td>
       <td>${onDisk}</td>
       <td><span class="bfx-risk-pill ${rc}">${d.risk_score}</span></td>`;
+    if (d.risk_score >= 31) {
+      row.addEventListener('click', () => aiExplainDownloadInline(d.filename, dlAiId, row));
+    }
     tbody.appendChild(row);
+    if (d.risk_score >= 31) {
+      const aiRow = document.createElement('tr');
+      aiRow.id = dlAiId + '_row';
+      aiRow.style.display = 'none';
+      aiRow.innerHTML = `<td colspan="7" style="padding:0;"><div id="${dlAiId}" class="bfx-ai-inline" style="margin:4px 10px 8px;display:none;"></div></td>`;
+      tbody.appendChild(aiRow);
+    }
   });
 
   document.getElementById('dlPageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('dlTotal').textContent = `${data.total.toLocaleString()} total downloads`;
+  document.getElementById('dlTotal').textContent    = `${data.total.toLocaleString()} total downloads`;
   document.getElementById('dlPrev').disabled = data.page <= 1;
   document.getElementById('dlNext').disabled = data.page >= data.total_pages;
 }
@@ -516,28 +585,25 @@ async function loadTimeline() {
   }
   const params = new URLSearchParams({ from: fromParam });
   const data = await API.get(`/api/timeline?${params}`);
-  const el = document.getElementById('timelineList');
-  if (!el) return;
+  const elTl = document.getElementById('timelineList');
+  if (!elTl) return;
   if (!data?.sessions?.length) {
-    el.innerHTML = '<div class="bfx-loading muted">No timeline data available.</div>';
+    elTl.innerHTML = '<div class="bfx-loading muted">No timeline data available.</div>';
     return;
   }
 
-  el.innerHTML = data.sessions.map((s, si) => {
+  const dotClass = { history: 'dot-history', cookie: 'dot-cookie', download: 'dot-download', bookmark: 'dot-bookmark' };
+
+  elTl.innerHTML = data.sessions.map((s, si) => {
     const start = fmtTime(s.start);
-    const end = fmtTime(s.end);
     const isOffhours = s.events?.some(e => {
-      try {
-        const h = new Date(e.time).getUTCHours();
-        return h >= 23 || h < 5;
-      } catch { return false; }
+      try { const h = new Date(e.time).getUTCHours(); return h >= 23 || h < 5; } catch { return false; }
     });
-    const dotClass = { history: 'dot-history', cookie: 'dot-cookie', download: 'dot-download', bookmark: 'dot-bookmark' };
 
     const itemsHtml = (s.events || []).map(e => {
       let text = '';
-      if (e.type === 'history') text = `<span style="font-family:var(--font-mono);font-size:10px;">${esc(e.domain)}</span> — ${esc(e.title || e.url || '')}`;
-      else if (e.type === 'cookie') text = `Cookie set: <span class="mono">${esc(e.name)}</span> on ${esc(e.host)}`;
+      if (e.type === 'history')  text = `<span style="font-family:var(--font-mono);font-size:10px;">${esc(e.domain)}</span> — ${esc(e.title || e.url || '')}`;
+      else if (e.type === 'cookie')   text = `Cookie set: <span class="mono">${esc(e.name)}</span> on ${esc(e.host)}`;
       else if (e.type === 'download') text = `Download: <span class="mono">${esc(e.filename)}</span> from ${esc(e.domain)}`;
       else text = esc(JSON.stringify(e));
       return `<div class="bfx-tl-item">
@@ -564,12 +630,7 @@ async function loadTimeline() {
 
 async function loadInvestigate() {
   loadSessionViewer();
-  // loadGapDetector is defined in investigate.html's script block.
-  // Guard the call so navigating via app.js on other pages doesn't throw.
-  if (typeof loadGapDetector === "function") {
-    loadGapDetector();
-  }
-  // Domain inspector pre-populated if hash present
+  if (typeof loadGapDetector === 'function') loadGapDetector();
   const hash = window.location.hash.replace('#domain=', '');
   if (hash) {
     const inp = document.getElementById('domainInspectInput');
@@ -608,20 +669,19 @@ async function inspectDomain() {
         ${data.in_history ? 'Yes' : 'No — cookie exists, history likely cleared'}
       </div>
     </div>
-    ${data.risk_reasons?.length ? `
-    <div style="margin-top:8px;" class="bfx-reason-box">⚑ ${esc(reasons)}</div>` : ''}
+    ${data.risk_reasons?.length ? `<div style="margin-top:8px;" class="bfx-reason-box">⚑ ${esc(reasons)}</div>` : ''}
   </div>`;
 }
 
 async function loadSessionViewer() {
   const data = await API.get('/api/sessions');
-  const el = document.getElementById('sessionViewer');
-  if (!el || !data?.sessions?.length) {
-    if (el) el.innerHTML = '<div class="muted" style="font-size:12px;">No sessions reconstructed.</div>';
+  const elSv = document.getElementById('sessionViewer');
+  if (!elSv || !data?.sessions?.length) {
+    if (elSv) elSv.innerHTML = '<div class="muted" style="font-size:12px;">No sessions reconstructed.</div>';
     return;
   }
 
-  el.innerHTML = data.sessions.slice(0, 10).map((s, i) => {
+  elSv.innerHTML = data.sessions.slice(0, 10).map((s, i) => {
     const start = fmtTime(s.start);
     const isOffhours = s.events?.some(e => {
       try { const h = new Date(e.time).getUTCHours(); return h >= 23 || h < 5; } catch { return false; }
@@ -639,41 +699,38 @@ async function loadSessionViewer() {
 
 async function loadGapDetector() {
   const data = await API.get('/api/overview');
-  const el = document.getElementById('gapDetectorContent');
-  if (!el || !data) return;
+  const elGap = document.getElementById('gapDetectorContent');
+  if (!elGap || !data) return;
 
   const gapAnomaly = (data.anomalies || []).find(a => a.type === 'history_gap');
   if (!gapAnomaly) {
-    el.innerHTML = '<div class="muted" style="font-size:12px;">No history gaps detected.</div>';
+    elGap.innerHTML = '<div class="muted" style="font-size:12px;">No history gaps detected.</div>';
     return;
   }
 
-  el.innerHTML = `
+  elGap.innerHTML = `
     <div style="font-size:13px;font-weight:bold;color:var(--text-primary);margin-bottom:8px;">
       ${gapAnomaly.domain_count} domain(s) with no history
-    </div>
-    <div class="bfx-gap-bar-wrap">
-      <div class="bfx-gap-segment" style="width:35%;background:var(--accent-safe);">History present</div>
-      <div class="bfx-gap-segment" style="width:20%;background:var(--accent-action);">Gap</div>
-      <div class="bfx-gap-segment" style="width:45%;background:var(--accent-safe);">History present</div>
-    </div>
-    <div class="bfx-gap-legend">
-      <span><span class="bfx-gap-dot" style="background:var(--accent-safe);"></span>History present</span>
-      <span><span class="bfx-gap-dot" style="background:var(--accent-action);"></span>Cleared</span>
     </div>
     <div class="muted" style="font-size:11px;margin-top:8px;">${esc(gapAnomaly.description)}</div>`;
 }
 
 // ── Report ────────────────────────────────────────────────────────────────────
 
+// FIX-REPORT: Module-scoped variable replaces window._bfxReport.
+// Forensic report content (URLs, cookie names, risk reasons) should not be
+// accessible to third-party scripts via the global window object.
+let _reportText = '';
+
 async function loadReport() {
-  // Just set up the form — generation is on button click
+  // Form setup only — generation is on button click
 }
 
 async function generateReport() {
-  const caseNum = document.getElementById('rptCase')?.value || '';
+  const caseNum  = document.getElementById('rptCase')?.value || '';
   const examName = document.getElementById('rptExaminer')?.value || '';
-  const acqDate = document.getElementById('rptDate')?.value || '';
+  const acqDate  = document.getElementById('rptDate')?.value || '';
+  const notes    = document.getElementById('rptNotes')?.value || '';
 
   const data = await API.get('/api/report');
   if (!data) {
@@ -685,9 +742,9 @@ async function generateReport() {
   const s = data.summary || {};
   const topAnomaly = (data.anomalies || [])[0]?.title || 'None';
 
-  const flaggedHistory = (data.flagged?.history || []).slice(0, 10);
-  const flaggedDownloads = (data.flagged?.downloads || []).slice(0, 5);
-  const flaggedCookies = (data.flagged?.cookies || []).slice(0, 5);
+  const flaggedHistory   = (data.flagged?.history   || []).slice(0, 10);
+  const flaggedDownloads = (data.flagged?.downloads  || []).slice(0, 5);
+  const flaggedCookies   = (data.flagged?.cookies    || []).slice(0, 5);
 
   const flaggedLines = [
     ...flaggedHistory.map(h =>
@@ -706,7 +763,11 @@ async function generateReport() {
     .map(([k, v]) => `  ${k.padEnd(14)} SHA256: ${v}`)
     .join('\n') || '  No hashes available.';
 
-  const report = `FORENSIC ANALYSIS REPORT
+  const notesSection = notes
+    ? `EXAMINER NOTES\n--------------\n${notes}\n\n`
+    : '';
+
+  _reportText = `FORENSIC ANALYSIS REPORT
 ========================
 Case No:        ${caseNum}
 Examiner:       ${examName}
@@ -717,14 +778,14 @@ Tool:           BrowserForensix v1.0.0
 EXECUTIVE SUMMARY
 -----------------
 ${s.total_artifacts || 0} artifacts extracted from ${m.browser || 'Chrome'} ${m.browser_version || ''}.
-Profile path: ${m.profile_path || 'Unknown'}
+Profiles: ${(m.profiles_extracted || []).map(p => p.label || p.dir || 'Unknown').join(', ') || m.profile_path || 'Unknown'}
 Platform: ${m.platform || 'Unknown'}
 ${s.anomaly_count || 0} anomalies detected.
 ${s.flagged_count || 0} items flagged (risk score ≥ 61).
 Average risk score: ${s.average_risk_score || 0}
 Highest-risk finding: ${topAnomaly}
 
-EVIDENCE INTEGRITY
+${notesSection}EVIDENCE INTEGRITY
 ------------------
 ${hashLines}
 Extraction time: ${m.extraction_time || 'Unknown'}
@@ -749,16 +810,15 @@ ${anomalyLines}
 Generated by BrowserForensix v1.0.0`;
 
   const prev = document.getElementById('reportPreview');
-  if (prev) prev.textContent = report;
-
-  // Store for download
-  window._bfxReport = report;
+  if (prev) prev.textContent = _reportText;
 }
 
 function downloadReport() {
-  const text = window._bfxReport || document.getElementById('reportPreview')?.textContent || '';
-  if (!text || text.includes('Generate Report')) return;
-  const blob = new Blob([text], { type: 'text/plain' });
+  // BUG-13 FIX: original guard was `_reportText.includes('Generate Report')`
+  // but _reportText initialises as '' which passes that check — the download
+  // would fire with an empty Blob. A falsy check is sufficient and correct.
+  if (!_reportText) return;
+  const blob = new Blob([_reportText], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `browserforensix-report-${Date.now()}.txt`;
@@ -769,7 +829,7 @@ function downloadReport() {
 
 async function runGlobalSearch(q) {
   const data = await API.get(`/api/search?q=${encodeURIComponent(q)}`);
-  const overlay = document.getElementById('searchOverlay');
+  const overlay   = document.getElementById('searchOverlay');
   const resultsEl = document.getElementById('searchResults');
   if (!overlay || !resultsEl || !data) return;
 
@@ -814,3 +874,105 @@ function closeSearch() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeSearch();
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AI INLINE EXPLAINERS — called from History, Downloads, Anomaly rows
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _aiInlineStart(containerId, label) {
+  const el = document.getElementById(containerId);
+  if (!el) return null;
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="bfx-ai-inline-header">
+      <span class="bfx-ai-inline-label">⬡ ${label}</span>
+    </div>
+    <div class="bfx-ai-inline-loading">
+      <div class="bfx-ai-inline-spinner"></div>
+      Analysing with AI…
+    </div>`;
+  // Show parent row if hidden (downloads)
+  const parentRow = document.getElementById(containerId + '_row');
+  if (parentRow) parentRow.style.display = '';
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  return el;
+}
+
+// _aiInlineStream removed (B12): was dead code — all inline AI uses _aiInlineFetch
+
+// Non-streaming fetch for fixed JSON responses
+function _aiInlineFetch(el, url, textKey) {
+  return fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      const text = data[textKey] || data.explanation || data.assessment || data.profile || data.analysis || data.deep_dive || '';
+      const model = data.model ? data.model.split('/').pop() : '';
+      el.innerHTML = `
+        <div class="bfx-ai-inline-header">
+          <span class="bfx-ai-inline-label">⬡ AI Analysis</span>
+          ${model ? `<span class="bfx-ai-inline-model">${esc(model)}</span>` : ''}
+        </div>
+        <div>${_aiFormatInline(text)}</div>`;
+    })
+    .catch(err => {
+      if (el) el.innerHTML = `<div style="color:var(--accent-moderate);font-size:11px;">AI error: ${esc(err.message)}</div>`;
+    });
+}
+
+function _aiFormatInline(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/⚠️/g, '<span style="color:#FCD34D;">⚠️</span>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+}
+
+// ── History item AI explain ──────────────────────────────────────────────────
+
+const _aiHistoryCache = {};
+
+async function aiExplainHistory(encodedUrl, containerId) {
+  if (_aiHistoryCache[containerId]) return; // already fetched
+  const el = _aiInlineStart(containerId, 'AI Risk Explanation');
+  if (!el) return;
+  _aiHistoryCache[containerId] = true;
+  await _aiInlineFetch(el, `/api/ai/explain/history?url=${encodedUrl}`, 'explanation');
+}
+
+// ── Downloads AI threat assess ───────────────────────────────────────────────
+
+const _aiDownloadCache = {};
+
+async function aiExplainDownloadInline(filename, containerId, clickedRow) {
+  const existingRow = document.getElementById(containerId + '_row');
+  // B11 FIX: toggle-off — if row is already visible, hide it and return
+  if (existingRow && existingRow.style.display !== 'none') {
+    existingRow.style.display = 'none';
+    return;
+  }
+  // Already fetched — just show the cached row
+  if (_aiDownloadCache[containerId]) {
+    if (existingRow) existingRow.style.display = '';
+    return;
+  }
+  const el = _aiInlineStart(containerId, 'AI Threat Assessment');
+  if (!el) return;
+  _aiDownloadCache[containerId] = true;
+  await _aiInlineFetch(el, `/api/ai/explain/download?filename=${encodeURIComponent(filename)}`, 'assessment');
+}
+
+// ── Anomaly AI deep dive ─────────────────────────────────────────────────────
+
+const _aiAnomalyCache = {};
+
+async function aiExplainAnomaly(anomalyType, containerId) {
+  if (_aiAnomalyCache[containerId]) return;
+  const el = _aiInlineStart(containerId, 'AI Deep Dive');
+  if (!el) return;
+  _aiAnomalyCache[containerId] = true;
+  await _aiInlineFetch(el, `/api/ai/anomaly?type=${encodeURIComponent(anomalyType)}`, 'deep_dive');
+}

@@ -59,6 +59,12 @@
         <span class="bfx-nav-icon">◑</span>
         <span class="bfx-nav-label">Report</span>
       </a>
+      <a class="bfx-nav-item {% if active == 'ai' %}active{% endif %}"
+         data-page="ai" href="/ai">
+        <span class="bfx-nav-icon">⬡</span>
+        <span class="bfx-nav-label">AI Analyst</span>
+        <span class="bfx-nav-badge" id="aiBadge" style="background:linear-gradient(135deg,#5B21B6,#8B45F5);font-size:8px;padding:1px 4px;">AI</span>
+      </a>
     </nav>
 
     <div class="bfx-status-bar" id="bfxStatusBar">
@@ -121,9 +127,15 @@
       return;
     }
     const m = data.meta || {};
-    const exTime = (m.extraction_time || '').replace('T', ' ').slice(0, 19) + 'Z';
-    if (metaEl) metaEl.textContent = `Extracted: ${exTime} · SHA256: ${Object.values(data.hashes || {})[0]?.slice(0, 8) || '—'}…`;
-    if (statusEl) statusEl.innerHTML = `<span class="bfx-status-dot"></span><span class="mono" style="font-size:10px;">${m.browser || 'Chrome'} · ${(data.summary?.total_artifacts || 0).toLocaleString()} artifacts</span>`;
+    const exTime = (m.extraction_time || '').replace('T', ' ').slice(0, 19);
+    const hashVal = Object.values(data.hashes || {})[0]?.slice(0, 8) || '—';
+    // Multi-profile: profiles_extracted is an array; fall back to profile_path string
+    const profiles = m.profiles_extracted || [];
+    const profileCount = profiles.length || 1;
+    const profileLabel = profileCount > 1 ? `${profileCount} profiles` : (profiles[0]?.name || 'Default');
+    const browserLabel = (m.browser || 'Chrome').charAt(0).toUpperCase() + (m.browser || 'Chrome').slice(1);
+    if (metaEl) metaEl.textContent = `Extracted: ${exTime} · ${profileCount} profile(s) · SHA256: ${hashVal}…`;
+    if (statusEl) statusEl.innerHTML = `<span class="bfx-status-dot"></span><span class="mono" style="font-size:10px;">${browserLabel} · ${(data.summary?.total_artifacts || 0).toLocaleString()} artifacts · ${profileLabel}</span>`;
 
     // Update nav badges
     const s = data.summary || {};
