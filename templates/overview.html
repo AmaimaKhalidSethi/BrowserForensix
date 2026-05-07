@@ -5,7 +5,7 @@
 {% block content %}
 <div id="overviewContent">
 
-  <!-- Stat Cards -->
+  <!-- ── Stat Cards ── -->
   <div class="bfx-stat-grid">
     <div class="bfx-stat-card">
       <div class="bfx-stat-label">Total Artifacts</div>
@@ -29,52 +29,82 @@
     </div>
   </div>
 
-  <!-- Profile Breakdown — shown only when multiple profiles extracted -->
-  <div class="bfx-section" id="profileSection" style="display:none;">
-    <div class="bfx-section-title">Extracted Profiles</div>
-    <div id="profileGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;"></div>
+  <!-- ── Profiles shelf (hidden until loaded) ── -->
+  <div class="bfx-panel" id="profileSection" style="display:none;margin-bottom:16px;">
+    <div class="bfx-panel-head">
+      <span class="bfx-panel-title">Extracted Profiles</span>
+      <span class="bfx-panel-badge" id="profileCountBadge"></span>
+    </div>
+    <div id="deletedAlert"></div>
+    <div class="bfx-profile-shelf" id="profileShelf"></div>
   </div>
 
-  <!-- Anomalies -->
-  <div class="bfx-section">
-    <div class="bfx-section-title">Detected Anomalies</div>
-    <div id="anomalyList">
-      <div class="bfx-loading">Loading anomalies…</div>
-    </div>
-  </div>
+  <!-- ── Dashboard body: main + side ── -->
+  <div class="bfx-dash-body">
 
-  <!-- Two-column: domains + heatmap -->
-  <div class="bfx-two-col">
-    <div class="bfx-section">
-      <div class="bfx-section-title">Top Domains by Visits</div>
-      <div id="domainList">
-        <div class="bfx-loading">Loading…</div>
-      </div>
-    </div>
-    <div class="bfx-section">
-      <div class="bfx-section-title">Activity Heatmap — visits by hour of day</div>
-      <div id="activityHeatmap">
-        <div class="bfx-loading">Building heatmap…</div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:6px;font-size:9px;color:var(--text-secondary);align-items:center;">
-        <span>Low</span>
-        <span style="display:flex;gap:2px;">
-          <span style="width:10px;height:10px;background:#EAD9C4;border-radius:2px;display:inline-block;"></span>
-          <span style="width:10px;height:10px;background:#C9A882;border-radius:2px;display:inline-block;"></span>
-          <span style="width:10px;height:10px;background:#A47E64;border-radius:2px;display:inline-block;"></span>
-          <span style="width:10px;height:10px;background:#7A5C44;border-radius:2px;display:inline-block;"></span>
-          <span style="width:10px;height:10px;background:#B7410E;border-radius:2px;display:inline-block;"></span>
-        </span>
-        <span>High</span>
-      </div>
-    </div>
-  </div>
+    <!-- Left: anomalies + hashes -->
+    <div class="bfx-dash-main">
 
-  <!-- Evidence Integrity -->
-  <div class="bfx-section">
-    <div class="bfx-section-title">Evidence Integrity — Source File Hashes</div>
-    <div id="evidenceMeta">
-      <div class="bfx-loading">Loading…</div>
+      <!-- Anomalies accordion -->
+      <div class="bfx-panel">
+        <div class="bfx-panel-head">
+          <span class="bfx-panel-title">Detected Anomalies</span>
+          <span class="bfx-panel-badge" id="anomalyCountBadge">—</span>
+        </div>
+        <div class="bfx-panel-body no-pad">
+          <div class="bfx-anomaly-accordion" id="anomalyList">
+            <div class="bfx-loading">Loading anomalies…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Evidence integrity -->
+      <div class="bfx-panel">
+        <div class="bfx-panel-head">
+          <span class="bfx-panel-title">Evidence Integrity — SHA-256 Hashes</span>
+        </div>
+        <div class="bfx-panel-body" id="evidenceMeta">
+          <div class="bfx-loading">Loading…</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right: top domains + heatmap -->
+    <div class="bfx-dash-side">
+
+      <!-- Top domains -->
+      <div class="bfx-panel">
+        <div class="bfx-panel-head">
+          <span class="bfx-panel-title">Top Domains by Visits</span>
+        </div>
+        <div class="bfx-panel-body no-pad" style="padding:8px 0;">
+          <div id="domainList"><div class="bfx-loading">Loading…</div></div>
+        </div>
+      </div>
+
+      <!-- Heatmap -->
+      <div class="bfx-panel">
+        <div class="bfx-panel-head">
+          <span class="bfx-panel-title">Activity Heatmap</span>
+          <span style="font-size:9px;color:var(--text-secondary);font-family:var(--font-mono);">visits by hour</span>
+        </div>
+        <div class="bfx-panel-body">
+          <div id="activityHeatmap"><div class="bfx-loading">Building…</div></div>
+          <div class="bfx-heatmap-legend">
+            <span>Low</span>
+            <div class="bfx-heatmap-legend-swatches">
+              <span class="bfx-heatmap-swatch" style="background:#13102A;border:1px solid #2D1B69;"></span>
+              <span class="bfx-heatmap-swatch" style="background:#2D1B69;"></span>
+              <span class="bfx-heatmap-swatch" style="background:#5B21B6;"></span>
+              <span class="bfx-heatmap-swatch" style="background:#8B45F5;"></span>
+              <span class="bfx-heatmap-swatch" style="background:#C084FC;"></span>
+            </div>
+            <span>High</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -83,67 +113,189 @@
 
 {% block scripts %}
 <script>
-  loadOverview();
-  // Load profile breakdown
-  API.get('/api/profiles').then(data => {
-    if (!data || data.count <= 1) return;
-    const section = document.getElementById('profileSection');
-    const grid    = document.getElementById('profileGrid');
-    if (!section || !grid) return;
-    section.style.display = '';
+loadOverview();
 
-    // Detect deleted profiles by finding gaps in Chrome's sequential numbering.
-    // Chrome never reuses profile numbers — gaps mean profiles were deleted.
-    // "Default" is always profile 0 conceptually; numbered profiles start at 1.
-    const dirs = data.profiles.map(p => p.dir || '');
-    const nums = dirs
-      .map(d => { const m = d.match(/^Profile\s+(\d+)$/i); return m ? parseInt(m[1]) : null; })
-      .filter(n => n !== null)
-      .sort((a,b) => a - b);
-    const deletedNums = [];
-    if (nums.length >= 2) {
-      for (let i = nums[0]; i <= nums[nums.length - 1]; i++) {
-        if (!nums.includes(i)) deletedNums.push(i);
-      }
+// ── Profiles ──────────────────────────────────────────────────────────────────
+API.get('/api/profiles').then(data => {
+  if (!data || data.count <= 1) return;
+
+  const section = document.getElementById('profileSection');
+  const shelf   = document.getElementById('profileShelf');
+  const badge   = document.getElementById('profileCountBadge');
+  if (!section || !shelf) return;
+
+  section.style.display = '';
+  badge.textContent = data.count + ' profile' + (data.count !== 1 ? 's' : '');
+
+  // ── Gap detection ──────────────────────────────────────────────────────────
+  const nums = data.profiles
+    .map(p => { const m = (p.dir||'').match(/^Profile\s+(\d+)$/i); return m ? parseInt(m[1]) : null; })
+    .filter(n => n !== null).sort((a,b) => a-b);
+  const deleted = [];
+  if (nums.length >= 2) {
+    for (let i = nums[0]; i <= nums[nums.length-1]; i++) {
+      if (!nums.includes(i)) deleted.push(i);
     }
-
-    // Show deleted profile warning if gaps detected
-    if (deletedNums.length > 0) {
-      const warn = document.createElement('div');
-      warn.style.cssText = 'margin-bottom:12px;padding:9px 13px;background:rgba(176,110,255,0.08);border:1px solid var(--border-vivid);border-left:3px solid var(--accent-action);border-radius:0 var(--radius-md) var(--radius-md) 0;font-size:11px;';
-      warn.innerHTML = '<span style="color:var(--accent-bright);font-weight:bold;">⚠ Deleted Profile Gap Detected</span>'
-        + '<span style="color:var(--text-secondary);margin-left:8px;">Profile ' + deletedNums.map(n => '<strong style=\'color:var(--text-primary)\'>Profile ' + n + '</strong>').join(', ') + ' '
-        + (deletedNums.length === 1 ? 'is' : 'are') + ' missing — Chrome never reuses profile numbers. '
-        + (deletedNums.length === 1 ? 'This profile was' : 'These profiles were') + ' deliberately deleted.</span>';
-      grid.before(warn);
+  }
+  if (deleted.length) {
+    const alert = document.getElementById('deletedAlert');
+    if (alert) {
+      alert.innerHTML = '<div class="bfx-deleted-alert">'
+        + '<strong>⚠ Deleted Profile Gap — Forensic Note:</strong> '
+        + 'Profile ' + deleted.map(n => '<strong>' + n + '</strong>').join(', ')
+        + ' ' + (deleted.length === 1 ? 'is' : 'are') + ' missing. '
+        + 'Chrome never reuses profile numbers — '
+        + (deleted.length === 1 ? 'this profile was' : 'these profiles were')
+        + ' deliberately deleted.</div>';
     }
+  }
 
-    grid.innerHTML = data.profiles.map(p => {
-      const total = Object.values(p.counts || {}).reduce((a,b) => a+b, 0);
-      const parenMatch = (p.name || '').match(/^(.+?)\s+\((.+)\)$/);
-      const dirLabel   = parenMatch ? parenMatch[1] : (p.dir || p.name || 'Unknown');
-      const account    = parenMatch ? parenMatch[2] : '';
-      const isEmail    = account.includes('@');
-      const borderCol  = total > 0 ? 'var(--border-vivid)' : 'var(--border-mid)';
-      const nameCol    = total > 0 ? 'var(--accent-bright)' : 'var(--text-secondary)';
-      // Extract profile number for display
-      const numMatch   = (p.dir || '').match(/^Profile\s+(\d+)$/i);
-      const profileNum = numMatch ? '#' + numMatch[1] : (p.dir === 'Default' ? '#0' : '');
-      return '<div style="background:var(--bg-raised);border:1px solid ' + borderCol + ';border-radius:var(--radius-md);padding:10px 12px;box-shadow:var(--glow-inner);min-width:0;">'
-        + '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:2px;">'
-        + '<div style="font-size:12px;font-weight:bold;color:' + nameCol + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;" title="' + esc(p.name) + '">' + esc(dirLabel) + '</div>'
-        + (profileNum ? '<div style="font-size:9px;color:var(--accent-dim);font-family:var(--font-mono);flex-shrink:0;">' + profileNum + '</div>' : '')
-        + '</div>'
-        + (account ? '<div style="font-size:10px;color:' + (isEmail ? 'var(--accent-dim)' : 'var(--text-secondary)') + ';font-family:var(--font-mono);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(account) + '">' + esc(account) + '</div>' : '<div style="margin-bottom:6px;"></div>')
-        + '<div style="display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:10px;font-family:var(--font-mono);">'
-        + '<div style="color:var(--text-secondary);">History</div><div style="color:var(--text-primary);text-align:right;">' + (p.counts.history||0).toLocaleString() + '</div>'
-        + '<div style="color:var(--text-secondary);">Cookies</div><div style="color:var(--text-primary);text-align:right;">' + (p.counts.cookies||0).toLocaleString() + '</div>'
-        + '<div style="color:var(--text-secondary);">Downloads</div><div style="color:var(--text-primary);text-align:right;">' + (p.counts.downloads||0).toLocaleString() + '</div>'
-        + '<div style="color:var(--text-secondary);">Bookmarks</div><div style="color:var(--text-primary);text-align:right;">' + (p.counts.bookmarks||0).toLocaleString() + '</div>'
-        + '</div>'
-        + '<div style="margin-top:7px;padding-top:6px;border-top:1px solid var(--border);font-size:9px;color:' + (total > 0 ? 'var(--accent-action)' : 'var(--accent-dim)') + ';font-family:var(--font-mono);font-weight:bold;">' + total.toLocaleString() + ' artifacts</div>'
-        + '</div>';
-    }).join('');
+  // ── Max counts for sparkbar scaling ───────────────────────────────────────
+  const maxH = Math.max(...data.profiles.map(p => p.counts.history  || 0), 1);
+  const maxC = Math.max(...data.profiles.map(p => p.counts.cookies  || 0), 1);
+  const maxD = Math.max(...data.profiles.map(p => p.counts.downloads|| 0), 1);
+  const maxB = Math.max(...data.profiles.map(p => p.counts.bookmarks|| 0), 1);
+
+  // ── Sort: profiles with data first, then by total desc ────────────────────
+  const sorted = [...data.profiles].sort((a,b) => {
+    const ta = Object.values(a.counts||{}).reduce((s,v)=>s+v,0);
+    const tb = Object.values(b.counts||{}).reduce((s,v)=>s+v,0);
+    return tb - ta;
   });
+
+  shelf.innerHTML = sorted.map(p => {
+    const total = Object.values(p.counts||{}).reduce((s,v)=>s+v,0);
+    const hasData = total > 0;
+    const pm = (p.name||'').match(/^(.+?)\s+\((.+)\)$/);
+    const dirLabel = pm ? pm[1] : (p.dir || p.name || 'Unknown');
+    const account  = pm ? pm[2] : '';
+    const isEmail  = account.includes('@');
+    const nm = (p.dir||'').match(/^Profile\s+(\d+)$/i);
+    const num = nm ? '#' + nm[1] : (p.dir === 'Default' ? '#0' : '');
+
+    function bar(val, max) {
+      const pct = max > 0 ? Math.max(3, Math.round((val/max)*100)) : 0;
+      return '<div class="bfx-profile-bar-row">'
+        + '<div class="bfx-profile-bar-track"><div class="bfx-profile-bar-fill" style="width:' + (val > 0 ? pct : 0) + '%;"></div></div>'
+        + '<div class="bfx-profile-bar-val">' + (val||0).toLocaleString() + '</div>'
+        + '</div>';
+    }
+
+    return '<div class="bfx-profile-card' + (hasData ? ' has-data' : '') + '">'
+      + '<div class="bfx-profile-head">'
+      + '<div class="bfx-profile-name" title="' + esc(p.name) + '">' + esc(dirLabel) + '</div>'
+      + (num ? '<div class="bfx-profile-num">' + num + '</div>' : '')
+      + '</div>'
+      + '<div class="bfx-profile-account' + (isEmail ? ' is-email' : '') + '" title="' + esc(account) + '">'
+      + (account ? esc(account) : '&nbsp;') + '</div>'
+      + '<div class="bfx-profile-bars">'
+      + '<div class="bfx-profile-bar-row"><div class="bfx-profile-bar-label">History</div>'  + bar(p.counts.history||0, maxH) + '</div>'
+      + '<div class="bfx-profile-bar-row"><div class="bfx-profile-bar-label">Cookies</div>'  + bar(p.counts.cookies||0, maxC) + '</div>'
+      + '<div class="bfx-profile-bar-row"><div class="bfx-profile-bar-label">Downloads</div>'+ bar(p.counts.downloads||0, maxD) + '</div>'
+      + '<div class="bfx-profile-bar-row"><div class="bfx-profile-bar-label">Bookmarks</div>'+ bar(p.counts.bookmarks||0, maxB) + '</div>'
+      + '</div>'
+      + '<div class="bfx-profile-total">' + total.toLocaleString() + ' artifacts</div>'
+      + '</div>';
+  }).join('');
+});
+
+// ── Override renderAnomalies to use accordion ─────────────────────────────────
+window.renderAnomalies = function(anomalies) {
+  const el = document.getElementById('anomalyList');
+  const badge = document.getElementById('anomalyCountBadge');
+  if (!el) return;
+
+  if (badge) badge.textContent = anomalies.length;
+
+  if (!anomalies.length) {
+    el.innerHTML = '<div class="muted" style="padding:14px;font-size:12px;">No anomalies detected.</div>';
+    return;
+  }
+
+  // Group by severity for ordered display
+  const order = { critical: 0, moderate: 1, low: 2 };
+  const sorted = [...anomalies].sort((a,b) =>
+    (order[a.severity]??9) - (order[b.severity]??9)
+  );
+
+  // Show first 8, collapse the rest
+  const INITIAL = 8;
+  let html = '';
+  sorted.forEach((a, i) => {
+    const sev = a.severity || 'low';
+    const anomAiId = 'anomAi_' + a.type + '_' + i;
+    const isOpen = i === 0; // first item open by default
+    html += '<div class="bfx-anom-row sev-' + sev + (isOpen ? ' open' : '') + (i >= INITIAL ? ' bfx-anom-extra' : '') + '"'
+      + (i >= INITIAL ? ' style="display:none;"' : '') + '>'
+      + '<div class="bfx-anom-header" onclick="this.closest(\'.bfx-anom-row\').classList.toggle(\'open\')">'
+      + '<div class="bfx-anom-sev-dot"></div>'
+      + '<div class="bfx-anom-label">' + esc(a.title || a.type.replace(/_/g,' ')) + '</div>'
+      + '<span class="bfx-anom-type-pill">' + esc(sev) + '</span>'
+      + '<span class="bfx-anom-chevron">▾</span>'
+      + '</div>'
+      + '<div class="bfx-anom-body">'
+      + '<div style="margin-bottom:8px;">' + esc(a.description) + '</div>'
+      + '<button class="bfx-btn outline sm" onclick="aiExplainAnomaly(\'' + esc(a.type) + '\',\'' + anomAiId + '\')">⬡ AI Deep Dive</button>'
+      + '<div id="' + anomAiId + '"></div>'
+      + '</div>'
+      + '</div>';
+  });
+
+  if (sorted.length > INITIAL) {
+    html += '<div class="bfx-anom-showmore" id="anomShowMore" onclick="showAllAnomalies()">'
+      + '▾ Show ' + (sorted.length - INITIAL) + ' more anomalies</div>';
+  }
+
+  el.innerHTML = html;
+};
+
+function showAllAnomalies() {
+  document.querySelectorAll('.bfx-anom-extra').forEach(el => el.style.display = '');
+  const btn = document.getElementById('anomShowMore');
+  if (btn) btn.remove();
+}
+
+// ── Override evidenceMeta rendering ──────────────────────────────────────────
+window._origLoadOverview = window.loadOverview;
+window.loadOverview = async function() {
+  const data = await API.get('/api/overview');
+  if (!data) { document.getElementById('overviewContent').innerHTML = '<div class="bfx-loading muted">Could not load overview data.</div>'; return; }
+
+  const s = data.summary || {};
+  const meta = data.meta || {};
+
+  document.getElementById('statArtifacts').textContent = (s.total_artifacts||0).toLocaleString();
+  document.getElementById('statFlagged').textContent   = s.flagged_count || 0;
+  document.getElementById('statRisk').textContent      = s.average_risk_score || 0;
+  document.getElementById('statAnomalies').textContent = s.anomaly_count || 0;
+
+  const profiles = meta.profiles_extracted || [];
+  const profileCount = profiles.length || 1;
+  const browserLabel = (meta.browser||'Chrome').charAt(0).toUpperCase() + (meta.browser||'Chrome').slice(1);
+  document.getElementById('statBrowserMeta').textContent =
+    browserLabel + ' · ' + (profileCount > 1 ? profileCount + ' profiles' : (profiles[0]?.name || 'Default'));
+
+  renderAnomalies(data.anomalies || []);
+  renderDomainList(data.top_domains || []);
+  renderHeatmap(data.heatmap || []);
+
+  // Evidence hashes — clean table
+  const metaEl = document.getElementById('evidenceMeta');
+  if (metaEl && data.hashes) {
+    const entries = Object.entries(data.hashes);
+    if (!entries.length) {
+      metaEl.innerHTML = '<span class="muted">No file hashes available.</span>';
+    } else {
+      metaEl.innerHTML = entries.map(([k,v]) =>
+        '<div class="bfx-hash-row">'
+        + '<div class="bfx-hash-file">' + esc(k) + '</div>'
+        + '<div class="bfx-hash-val">' + esc(v) + '</div>'
+        + '</div>'
+      ).join('');
+    }
+  }
+};
+
+loadOverview();
 </script>
 {% endblock %}
