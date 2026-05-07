@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BrowserForensix{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <!-- Theme flash prevention: runs synchronously before first paint -->
+  <script>
+    (function() {
+      try {
+        var saved = localStorage.getItem('bfx-theme');
+        if (saved === 'warm') document.documentElement.setAttribute('data-theme', 'warm');
+      } catch(_) {}
+    })();
+  </script>
+  <style>
+    /* Suppresses transitions during theme init to prevent flash */
+    .bfx-no-transition * { transition: none !important; }
+  </style>
 </head>
 <body>
 <div class="bfx-app">
@@ -80,6 +93,13 @@
     <div class="bfx-topbar">
       <div class="bfx-topbar-title" id="bfxPageTitle">{% block page_title %}{% endblock %}</div>
       <span class="bfx-topbar-meta" id="bfxTopbarMeta"></span>
+      <button class="bfx-theme-toggle" id="themeToggle"
+              onclick="toggleTheme()"
+              aria-label="Toggle colour theme"
+              title="Switch to Light mode">
+        <span class="bfx-theme-toggle-icon" id="themeToggleIcon">☽</span>
+        <span class="bfx-theme-toggle-label" id="themeToggleLabel">Dark</span>
+      </button>
       <input class="bfx-search" type="text" id="globalSearch" placeholder="Search all artifacts…">
     </div>
 

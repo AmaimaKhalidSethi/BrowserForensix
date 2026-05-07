@@ -1,35 +1,50 @@
-/* BrowserForensix — style.css — Deep Violet Theme (Enhanced) */
+/* ═══════════════════════════════════════════════════════════════════════════
+   THEME SYSTEM — prepend to top of style.css, replacing the :root block
+   ═══════════════════════════════════════════════════════════════════════════
 
+   Architecture:
+     • :root  = Dark mode (Deep Violet) — unchanged default
+     • [data-theme="warm"] on <html> = Warm Light mode
+     • A 0.3s transition on every element for premium feel
+     • Theme toggle button styles included at bottom
+*/
+
+/* ── Dark Theme (original Deep Violet — :root default) ──────────────────── */
 :root {
-  /* ── Backgrounds: richer, more layered purples ── */
+  /* Backgrounds */
   --bg-base:        #06050F;
   --bg-surface:     #0D0B1A;
   --bg-panel:       #130F22;
   --bg-raised:      #1A1530;
 
-  /* ── Text ── */
+  /* Text */
   --text-primary:   #EDE8FF;
   --text-secondary: #9D8FD4;
 
-  /* ── Purple accent spectrum ── */
-  --accent-action:  #B06EFF;   /* core violet — brighter than before */
-  --accent-glow:    #8B45F5;   /* deep violet */
-  --accent-bright:  #D4AAFF;   /* lavender highlight */
-  --accent-dim:     #7C5CBF;   /* muted violet for subtle uses */
-  --accent-ultra:   #E8D5FF;   /* near-white violet for high-contrast moments */
+  /* Purple accent spectrum */
+  --accent-action:  #B06EFF;
+  --accent-glow:    #8B45F5;
+  --accent-bright:  #D4AAFF;
+  --accent-dim:     #7C5CBF;
+  --accent-ultra:   #E8D5FF;
 
-  /* ── Functional accents (unchanged) ── */
+  /* Functional accents */
   --accent-safe:    #34D399;
   --accent-moderate:#F59E0B;
 
-  /* ── Borders: stronger violet presence ── */
+  /* Borders */
   --border:         #2A2048;
   --border-mid:     #3D2D6E;
   --border-glow:    #5B21B6;
   --border-bright:  #7C3AED;
   --border-vivid:   #9B59F5;
 
-  /* ── Glow library ── */
+  /* Sidebar gradient stops (used in hardcoded grads) */
+  --sidebar-grad-top:    #110D20;
+  --sidebar-grad-bot:    #0D0B1A;
+  --topbar-grad-end:     #0F0C1F;
+
+  /* Glow library */
   --glow-xs:        0 0 5px  rgba(176,110,255,0.30);
   --glow-sm:        0 0 10px rgba(176,110,255,0.40);
   --glow-md:        0 0 20px rgba(176,110,255,0.30);
@@ -37,17 +52,409 @@
   --glow-inner:     inset 0 0 20px rgba(176,110,255,0.06);
   --glow-inner-md:  inset 0 0 40px rgba(139,69,245,0.10);
 
-  /* ── Typography ── */
+  /* Typography */
   --text-on-dark:   #EDE8FF;
   --font-serif:     Georgia, 'Times New Roman', serif;
   --font-mono:      'Courier New', Courier, monospace;
 
-  /* ── Radius ── */
+  /* Radius */
   --radius-sm:      3px;
   --radius-md:      5px;
   --radius-lg:      8px;
+
+  /* Theme toggle icon */
+  --toggle-icon:    "☽";
+  --toggle-label:   "Dark";
 }
 
+/* ── Warm Light Theme ────────────────────────────────────────────────────── */
+/*
+   Palette rationale:
+     Base:       #FAF7F2  — creamy off-white, zero eye strain
+     Surface:    #F3EEE8  — warm card background
+     Panel:      #EDE6DC  — slightly deeper panel for layering
+     Raised:     #E5DDD0  — table rows, inputs, raised elements
+     Text:       #2D1B54  — deep eggplant — readable, brand-consistent
+     Secondary:  #7B6A99  — muted plum for labels / timestamps
+     Accent:     #7C3AED  — pastel purple primary — matches violet brand
+     Border:     #C4B0E8  — soft lavender border — light but visible
+*/
+[data-theme="warm"] {
+  /* Backgrounds */
+  --bg-base:        #FAF7F2;
+  --bg-surface:     #F3EEE8;
+  --bg-panel:       #EDE6DC;
+  --bg-raised:      #E5DDD0;
+
+  /* Text */
+  --text-primary:   #2D1B54;
+  --text-secondary: #7B6A99;
+
+  /* Purple accent spectrum — lightened for light mode legibility */
+  --accent-action:  #7C3AED;
+  --accent-glow:    #6D28D9;
+  --accent-bright:  #5B21B6;
+  --accent-dim:     #9966CC;
+  --accent-ultra:   #4C1D95;
+
+  /* Functional accents — slightly deeper for contrast on light */
+  --accent-safe:    #059669;
+  --accent-moderate:#D97706;
+
+  /* Borders */
+  --border:         #D8CCF0;
+  --border-mid:     #C4B0E8;
+  --border-glow:    #A78BDB;
+  --border-bright:  #8B6DC8;
+  --border-vivid:   #7C3AED;
+
+  /* Sidebar gradient stops */
+  --sidebar-grad-top:    #EDE6DC;
+  --sidebar-grad-bot:    #E5DDD0;
+  --topbar-grad-end:     #EDE6DC;
+
+  /* Glows — subtle warm purples for light mode */
+  --glow-xs:        0 0 5px  rgba(124,58,237,0.15);
+  --glow-sm:        0 0 10px rgba(124,58,237,0.18);
+  --glow-md:        0 0 20px rgba(124,58,237,0.12);
+  --glow-lg:        0 0 35px rgba(124,58,237,0.08);
+  --glow-inner:     inset 0 0 20px rgba(124,58,237,0.04);
+  --glow-inner-md:  inset 0 0 40px rgba(109,40,217,0.06);
+
+  /* Text on dark (used for button text on violet buttons) */
+  --text-on-dark:   #FFFFFF;
+
+  /* Theme toggle icon */
+  --toggle-icon:    "☀";
+  --toggle-label:   "Light";
+}
+
+
+/* ── Global theme transition ─────────────────────────────────────────────── */
+/*
+   Applied to every element so theme switches feel premium (0.3s ease).
+   Excluded: animations, transforms, box-shadow on interactive hover
+   (those stay snappy via their own shorter transitions).
+*/
+*, *::before, *::after {
+  transition:
+    background-color 0.3s ease,
+    background 0.3s ease,
+    color 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+
+/* Override: restore fast transitions for interactive micro-feedback */
+.bfx-btn,
+.bfx-nav-item,
+.bfx-domain-row,
+.bfx-table tr,
+.bfx-filter-select,
+.bfx-filter-input,
+.bfx-search,
+.bfx-page-btn,
+.bfx-ai-quick-btn,
+.bfx-anom-header,
+.bfx-session-header,
+.bfx-folder-item,
+.bfx-bm-row,
+.bfx-tl-item {
+  transition:
+    background-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+/* ── Warm mode: invert dot-glow colours for light readability ─────────────── */
+[data-theme="warm"] .dot-history {
+  background: #7C3AED;
+  box-shadow: 0 0 6px rgba(124,58,237,0.60);
+}
+[data-theme="warm"] .dot-cookie {
+  background: #B45309;
+  box-shadow: 0 0 5px rgba(180,83,9,0.50);
+}
+[data-theme="warm"] .dot-download {
+  background: #059669;
+  box-shadow: 0 0 5px rgba(5,150,105,0.55);
+}
+[data-theme="warm"] .dot-bookmark {
+  background: #6D28D9;
+  box-shadow: 0 0 5px rgba(109,40,217,0.50);
+}
+
+/* ── Warm mode: table hover uses a warm tint ─────────────────────────────── */
+[data-theme="warm"] .bfx-table tr:hover td {
+  background: rgba(124,58,237,0.06);
+}
+[data-theme="warm"] .bfx-table tr.flagged td {
+  background: rgba(124,58,237,0.05);
+  border-bottom-color: rgba(124,58,237,0.12);
+}
+
+/* ── Warm mode: risk pills adjusted for light backgrounds ────────────────── */
+[data-theme="warm"] .bfx-risk-pill.high {
+  background: rgba(124,58,237,0.12);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.35);
+  box-shadow: none;
+}
+[data-theme="warm"] .bfx-risk-pill.moderate {
+  background: rgba(217,119,6,0.12);
+  color: #92400E;
+  border: 1px solid rgba(217,119,6,0.30);
+}
+[data-theme="warm"] .bfx-risk-pill.low {
+  background: rgba(5,150,105,0.10);
+  color: #065F46;
+  border: 1px solid rgba(5,150,105,0.25);
+}
+
+/* ── Warm mode: protocol badges ──────────────────────────────────────────── */
+[data-theme="warm"] .bfx-proto-badge.http {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.25);
+}
+[data-theme="warm"] .bfx-proto-badge.https {
+  background: rgba(5,150,105,0.10);
+  color: #065F46;
+  border: 1px solid rgba(5,150,105,0.22);
+}
+
+/* ── Warm mode: cookie type badges ──────────────────────────────────────── */
+[data-theme="warm"] .type-auth {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.28);
+  box-shadow: none;
+}
+[data-theme="warm"] .type-tracking {
+  background: rgba(217,119,6,0.10);
+  color: #92400E;
+  border: 1px solid rgba(217,119,6,0.25);
+}
+[data-theme="warm"] .type-session {
+  background: rgba(5,150,105,0.10);
+  color: #065F46;
+  border: 1px solid rgba(5,150,105,0.22);
+}
+[data-theme="warm"] .type-zombie {
+  background: rgba(109,40,217,0.10);
+  color: #3B0764;
+  border: 1px solid rgba(109,40,217,0.28);
+  box-shadow: none;
+}
+[data-theme="warm"] .type-analytics {
+  background: rgba(2,132,199,0.10);
+  color: #0C4A6E;
+  border: 1px solid rgba(2,132,199,0.22);
+}
+[data-theme="warm"] .type-unknown {
+  background: rgba(123,106,153,0.10);
+  color: #4A3B6B;
+  border: 1px solid rgba(123,106,153,0.22);
+}
+
+/* ── Warm mode: download badges ──────────────────────────────────────────── */
+[data-theme="warm"] .dl-yes,
+[data-theme="warm"] .dl-found {
+  background: rgba(5,150,105,0.10);
+  color: #065F46;
+  border: 1px solid rgba(5,150,105,0.22);
+}
+[data-theme="warm"] .dl-no,
+[data-theme="warm"] .dl-missing {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.28);
+}
+
+/* ── Warm mode: offhours badge ───────────────────────────────────────────── */
+[data-theme="warm"] .bfx-offhours-badge {
+  background: rgba(217,119,6,0.12);
+  color: #92400E;
+  border: 1px solid rgba(217,119,6,0.25);
+}
+
+/* ── Warm mode: anomaly severity pills ───────────────────────────────────── */
+[data-theme="warm"] .sev-critical .bfx-anom-type-pill {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.25);
+}
+[data-theme="warm"] .sev-moderate .bfx-anom-type-pill {
+  background: rgba(217,119,6,0.10);
+  color: #92400E;
+  border: 1px solid rgba(217,119,6,0.22);
+}
+[data-theme="warm"] .sev-low .bfx-anom-type-pill {
+  background: rgba(5,150,105,0.10);
+  color: #065F46;
+  border: 1px solid rgba(5,150,105,0.20);
+}
+
+/* ── Warm mode: panel badge ──────────────────────────────────────────────── */
+[data-theme="warm"] .bfx-panel-badge {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.22);
+}
+
+/* ── Warm mode: heatmap legend swatches ──────────────────────────────────── */
+[data-theme="warm"] .bfx-heatmap-legend-swatches .bfx-heatmap-swatch:nth-child(1) {
+  background: #F3EEE8;
+  border: 1px solid #D8CCF0;
+}
+[data-theme="warm"] .bfx-heatmap-legend-swatches .bfx-heatmap-swatch:nth-child(2) {
+  background: #DDD0F5;
+}
+[data-theme="warm"] .bfx-heatmap-legend-swatches .bfx-heatmap-swatch:nth-child(3) {
+  background: #B89EE8;
+}
+[data-theme="warm"] .bfx-heatmap-legend-swatches .bfx-heatmap-swatch:nth-child(4) {
+  background: #8B6DC8;
+}
+[data-theme="warm"] .bfx-heatmap-legend-swatches .bfx-heatmap-swatch:nth-child(5) {
+  background: #5B21B6;
+}
+
+/* ── Warm mode: status dot animations ────────────────────────────────────── */
+[data-theme="warm"] .bfx-status-dot {
+  box-shadow: 0 0 6px rgba(5,150,105,0.70);
+}
+[data-theme="warm"] .bfx-status-dot.error {
+  box-shadow: 0 0 8px rgba(124,58,237,0.70);
+}
+
+/* ── Warm mode: scrollbar ────────────────────────────────────────────────── */
+[data-theme="warm"] .bfx-content {
+  scrollbar-color: var(--border-vivid) var(--bg-surface);
+}
+[data-theme="warm"] .bfx-content::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--accent-dim), var(--border-vivid));
+}
+
+/* ── Warm mode: no-data banner ───────────────────────────────────────────── */
+[data-theme="warm"] .bfx-no-data {
+  background: rgba(124,58,237,0.05);
+  border-color: var(--border-mid);
+  border-left-color: var(--accent-action);
+}
+[data-theme="warm"] .bfx-no-data h2 {
+  color: var(--accent-bright);
+  text-shadow: none;
+}
+[data-theme="warm"] .bfx-no-data code {
+  background: var(--bg-panel);
+  border-color: var(--border-mid);
+  color: var(--accent-bright);
+}
+
+/* ── Warm mode: stat value danger glow ───────────────────────────────────── */
+[data-theme="warm"] .bfx-stat-value.danger {
+  color: var(--accent-action);
+  text-shadow: none;
+}
+
+/* ── Warm mode: AI chat bubbles ──────────────────────────────────────────── */
+[data-theme="warm"] .bfx-ai-msg.user .bfx-ai-msg-content {
+  box-shadow: 0 0 12px rgba(124,58,237,0.20);
+}
+[data-theme="warm"] .bfx-ai-msg.assistant .bfx-ai-msg-content {
+  box-shadow: none;
+  border-color: var(--border-mid);
+}
+[data-theme="warm"] .bfx-ai-cursor {
+  background: var(--accent-action);
+  box-shadow: 0 0 5px rgba(124,58,237,0.60);
+}
+
+/* ── Warm mode: reason box ───────────────────────────────────────────────── */
+[data-theme="warm"] .bfx-reason-box {
+  background: rgba(124,58,237,0.06);
+  color: var(--accent-bright);
+  text-shadow: none;
+  box-shadow: none;
+  border-left-color: var(--accent-action);
+}
+
+/* ── Warm mode: deleted badge ────────────────────────────────────────────── */
+[data-theme="warm"] .bfx-deleted-badge {
+  background: rgba(124,58,237,0.10);
+  color: #4C1D95;
+  border: 1px solid rgba(124,58,237,0.28);
+  box-shadow: none;
+}
+
+/* ── Warm mode: nav AI badge ─────────────────────────────────────────────── */
+[data-theme="warm"] .bfx-nav-badge {
+  box-shadow: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   THEME TOGGLE BUTTON
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Drop-in for the topbar. Add this HTML in base.html topbar:
+   <button class="bfx-theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="Toggle theme">
+     <span class="bfx-theme-toggle-icon" id="themeToggleIcon">☽</span>
+     <span class="bfx-theme-toggle-label" id="themeToggleLabel">Dark</span>
+   </button>
+*/
+.bfx-theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-mid);
+  color: var(--text-secondary);
+  font-family: var(--font-serif);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  /* Smooth theme-crossfade inherited from global transition */
+  transition:
+    background-color 0.3s ease,
+    border-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+.bfx-theme-toggle:hover {
+  border-color: var(--border-vivid);
+  color: var(--text-primary);
+  box-shadow: var(--glow-xs);
+  transform: translateY(-1px);
+}
+.bfx-theme-toggle:active {
+  transform: translateY(0);
+}
+.bfx-theme-toggle-icon {
+  font-size: 13px;
+  line-height: 1;
+  transition: transform 0.4s ease;
+}
+.bfx-theme-toggle:hover .bfx-theme-toggle-icon {
+  transform: rotate(20deg) scale(1.1);
+}
+[data-theme="warm"] .bfx-theme-toggle {
+  border-color: var(--border-mid);
+  color: var(--text-secondary);
+}
+[data-theme="warm"] .bfx-theme-toggle:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-vivid);
+  color: var(--text-primary);
+}
+
+/* ── Box reset (kept separate from transition to avoid overriding it) ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -69,7 +476,7 @@ a:hover { text-decoration: underline; color: var(--accent-action); }
 .bfx-sidebar {
   width: 200px;
   min-width: 200px;
-  background: linear-gradient(180deg, #110D20 0%, #0D0B1A 100%);
+  background: linear-gradient(180deg, var(--sidebar-grad-top) 0%, var(--sidebar-grad-bot) 100%);
   border-right: 1px solid var(--border-mid);
   box-shadow: 2px 0 20px rgba(139,69,245,0.12);
   display: flex;
@@ -173,7 +580,7 @@ a:hover { text-decoration: underline; color: var(--accent-action); }
 .bfx-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
 .bfx-topbar {
-  background: linear-gradient(90deg, var(--bg-surface) 0%, #0F0C1F 100%);
+  background: linear-gradient(90deg, var(--bg-surface) 0%, var(--topbar-grad-end) 100%);
   border-bottom: 1px solid var(--border-mid);
   box-shadow: 0 2px 14px rgba(139,69,245,0.10);
   padding: 8px 20px;

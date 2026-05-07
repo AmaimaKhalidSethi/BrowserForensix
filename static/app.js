@@ -143,6 +143,102 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME TOGGLE — Warm Light / Dark (Deep Violet)
+//
+// How it works:
+//   • [data-theme="warm"] on <html> activates the warm palette via CSS.
+//   • Preference persisted to localStorage under key "bfx-theme".
+//   • On page load we read localStorage BEFORE paint to prevent flash.
+//     (The blocking <script> in base.html's <head> handles the flash guard;
+//      this function is called from there AND here as a fallback.)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const THEME_KEY = 'bfx-theme';
+const THEME_WARM = 'warm';
+
+/**
+ * Apply a theme immediately without animation flash.
+ * @param {'warm'|null} theme  Pass THEME_WARM for light, null/undefined for dark.
+ * @param {boolean} animate    If false, temporarily disables CSS transitions.
+ */
+function _applyTheme(theme, animate = true) {
+  const root = document.documentElement;
+
+  if (!animate) {
+    // Kill transitions for this tick so the initial paint doesn't animate in
+    root.style.setProperty('--transition-override', 'none');
+    root.classList.add('bfx-no-transition');
+  }
+
+  if (theme === THEME_WARM) {
+    root.setAttribute('data-theme', THEME_WARM);
+  } else {
+    root.removeAttribute('data-theme');
+  }
+
+  if (!animate) {
+    // Force reflow so the attribute change is visible, THEN re-enable transitions
+    // eslint-disable-next-line no-unused-expressions
+    root.offsetHeight;
+    root.classList.remove('bfx-no-transition');
+  }
+
+  _syncToggleButton(theme);
+}
+
+/**
+ * Update toggle button icon + label to reflect the current theme.
+ */
+function _syncToggleButton(theme) {
+  const iconEl  = document.getElementById('themeToggleIcon');
+  const labelEl = document.getElementById('themeToggleLabel');
+  if (!iconEl || !labelEl) return;
+
+  if (theme === THEME_WARM) {
+    iconEl.textContent  = '☀';
+    labelEl.textContent = 'Light';
+    iconEl.title = 'Switch to Dark mode';
+  } else {
+    iconEl.textContent  = '☽';
+    labelEl.textContent = 'Dark';
+    iconEl.title = 'Switch to Light mode';
+  }
+}
+
+/**
+ * Public toggle function — called by the button's onclick.
+ * Reads current state, flips it, persists, applies with animation.
+ */
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === THEME_WARM ? null : THEME_WARM;
+
+  try {
+    if (next) {
+      localStorage.setItem(THEME_KEY, next);
+    } else {
+      localStorage.removeItem(THEME_KEY);
+    }
+  } catch (_) { /* localStorage blocked — still apply in memory */ }
+
+  _applyTheme(next, true); // true = allow 0.3s CSS transition
+}
+
+/**
+ * Called once at startup (ideally from a <head> blocking script in base.html
+ * to fully prevent FOUC). Also safe to call here as a fallback.
+ */
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (_) {}
+  _applyTheme(saved === THEME_WARM ? THEME_WARM : null, false); // false = no transition on init
+}
+
+// Run immediately (fallback if <head> script is absent)
+initTheme();
+
 // ── Profile filter utility ────────────────────────────────────────────────────
 // With multi-profile extraction, every artifact has a "profile" field.
 // These helpers build and apply profile filtering across pages.
