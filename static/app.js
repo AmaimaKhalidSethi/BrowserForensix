@@ -224,6 +224,15 @@ function toggleTheme() {
   } catch (_) { /* localStorage blocked — still apply in memory */ }
 
   _applyTheme(next, true); // true = allow 0.3s CSS transition
+
+  // Re-render the heatmap if it's visible — it uses JS-injected inline colours
+  // that don't respond to CSS variable changes, so we must re-build it.
+  if (typeof loadOverview === 'function' && document.getElementById('activityHeatmap')) {
+    // Only re-render the heatmap portion, not the whole overview
+    API.get('/api/overview').then(data => {
+      if (data?.heatmap) renderHeatmap(data.heatmap);
+    });
+  }
 }
 
 /**
@@ -379,8 +388,15 @@ function renderHeatmap(heatData) {
   const elHeat = document.getElementById('activityHeatmap');
   if (!elHeat) return;
   const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  // 5-stop purple scale: empty → deep indigo → rich violet → bright purple → vivid lavender
-  const STOPS = [
+  // 5-stop purple scale: theme-aware. Dark = deep indigo→lavender; Light = cream→deep violet.
+  const isWarm = document.documentElement.getAttribute('data-theme') === 'warm';
+  const STOPS = isWarm ? [
+    '#F3EEE8',   // 0 — empty cell (warm cream, matches bg-surface)
+    '#DDD0F5',   // 1 — low  (soft lavender)
+    '#B89EE8',   // 2 — mid  (muted purple)
+    '#8B6DC8',   // 3 — high (medium violet)
+    '#5B21B6',   // 4 — peak (deep violet)
+  ] : [
     '#13102A',   // 0 — empty cell (near-black violet)
     '#2D1B69',   // 1 — low  (deep indigo)
     '#5B21B6',   // 2 — mid  (rich violet)
