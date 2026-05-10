@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %} — CTF Tools{% endblock %}
+{% block page_title %}CTF Tools{% endblock %}
+
+{% block content %}
+
+<!-- Stat cards -->
+<div class="bfx-stat-grid" id="ctfStatGrid" style="margin-bottom:20px;">
+  <div class="bfx-stat-card">
+    <div class="bfx-stat-label">Flag Pattern Hits</div>
+    <div class="bfx-stat-value danger" id="ctfStatFlags">—</div>
+    <div class="bfx-stat-sub">across all artifact fields</div>
+  </div>
+  <div class="bfx-stat-card">
+    <div class="bfx-stat-label">Encoded Fields</div>
+    <div class="bfx-stat-value" id="ctfStatEncoded">—</div>
+    <div class="bfx-stat-sub">base64 / hex / URL / ROT13</div>
+  </div>
+  <div class="bfx-stat-card">
+    <div class="bfx-stat-label">URL Parameters</div>
+    <div class="bfx-stat-value" id="ctfStatParams">—</div>
+    <div class="bfx-stat-sub">query key=value pairs found</div>
+  </div>
+  <div class="bfx-stat-card">
+    <div class="bfx-stat-label">Total Artifacts</div>
+    <div class="bfx-stat-value" id="ctfStatArtifacts">—</div>
+    <div class="bfx-stat-sub">scanned for all tools</div>
+  </div>
+</div>
+
+<!-- Tab bar -->
+<div class="bfx-filter-bar" style="margin-bottom:18px;gap:6px;">
+  <button class="bfx-btn sm"         id="ctfTabFlagBtn"    onclick="ctfShowTab('flags')">⚑ Flag Scanner</button>
+  <button class="bfx-btn outline sm" id="ctfTabDecodeBtn"  onclick="ctfShowTab('decode')">⇌ Encoding Detector</button>
+  <button class="bfx-btn outline sm" id="ctfTabParamsBtn"  onclick="ctfShowTab('params')">⊞ URL Parameters</button>
+  <button class="bfx-btn outline sm" id="ctfTabCookieBtn"  onclick="ctfShowTab('cookie')">◻ Cookie Inspector</button>
+</div>
+
+<!-- ══════════════════ FLAG SCANNER TAB ══════════════════ -->
+<div id="ctfTabFlags">
+  <div class="bfx-invest-card" style="margin-bottom:14px;">
+    <div class="bfx-invest-title">Flag Pattern Scanner</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+      Scans every string field across all artifacts for known CTF flag formats.
+      Add a custom regex for challenge-specific formats.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Artifact Type</div>
+        <select class="bfx-filter-select" id="ctfFlagTypeFilter">
+          <option value="">All types</option>
+          <option value="history">History</option>
+          <option value="cookie">Cookies</option>
+          <option value="download">Downloads</option>
+          <option value="bookmark">Bookmarks</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Custom Pattern (regex)</div>
+        <input class="bfx-invest-input" type="text" id="ctfCustomPattern"
+               placeholder="e.g. MYCTF\{[^}]+\}" style="width:100%;margin-bottom:0;">
+      </div>
+      <button class="bfx-btn sm" onclick="ctfRunFlagScan()" id="ctfFlagScanBtn">Scan</button>
+    </div>
+    <div style="margin-top:10px;font-size:10px;color:var(--text-secondary);">
+      Built-in patterns: <span class="mono">FLAG{}</span> <span class="mono">CTF{}</span>
+      <span class="mono">picoCTF{}</span> <span class="mono">HTB{}</span>
+      <span class="mono">THM{}</span> <span class="mono">DUCTF{}</span>
+      <span class="mono">ACSC{}</span> + 32–64 char hex strings
+    </div>
+  </div>
+
+  <div id="ctfFlagResults">
+    <div class="muted" style="font-size:12px;padding:8px 0;">Run a scan to see results.</div>
+  </div>
+</div>
+
+<!-- ══════════════════ ENCODING DETECTOR TAB ══════════════════ -->
+<div id="ctfTabDecode" style="display:none;">
+  <div class="bfx-invest-card" style="margin-bottom:14px;">
+    <div class="bfx-invest-title">Encoding Detector</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+      Attempts base64, hex, URL-decode, and ROT13 on every artifact string field.
+      Only shows fields where a decoding produces a meaningfully different result.
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Artifact Type</div>
+        <select class="bfx-filter-select" id="ctfDecodeTypeFilter">
+          <option value="">All types</option>
+          <option value="history">History</option>
+          <option value="cookie">Cookies</option>
+          <option value="download">Downloads</option>
+          <option value="bookmark">Bookmarks</option>
+        </select>
+      </div>
+      <button class="bfx-btn sm" onclick="ctfRunDecoder()" id="ctfDecodeRunBtn">Detect</button>
+    </div>
+  </div>
+
+  <div id="ctfDecodeResults">
+    <div class="muted" style="font-size:12px;padding:8px 0;">Run detection to see results.</div>
+  </div>
+</div>
+
+<!-- ══════════════════ URL PARAMS TAB ══════════════════ -->
+<div id="ctfTabParams" style="display:none;">
+  <div class="bfx-invest-card" style="margin-bottom:14px;">
+    <div class="bfx-invest-title">URL Parameter Decomposer</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+      Breaks down query strings from all history URLs into individual
+      <span class="mono">key=value</span> pairs, scans each for flags,
+      and attempts decoding. URLs with flag hits or suspicious values are shown first.
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <div style="flex:1;min-width:180px;">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Filter by URL keyword</div>
+        <input class="bfx-invest-input" type="text" id="ctfParamSearch"
+               placeholder="e.g. login, token, redirect" style="width:100%;margin-bottom:0;">
+      </div>
+      <button class="bfx-btn sm" onclick="ctfRunParams()" id="ctfParamsRunBtn">Decompose</button>
+    </div>
+  </div>
+
+  <div id="ctfParamsResults">
+    <div class="muted" style="font-size:12px;padding:8px 0;">Click Decompose to analyse URL parameters.</div>
+  </div>
+</div>
+
+<!-- ══════════════════ COOKIE INSPECTOR TAB ══════════════════ -->
+<div id="ctfTabCookie" style="display:none;">
+  <div class="bfx-invest-card" style="margin-bottom:14px;">
+    <div class="bfx-invest-title">Cookie Value Inspector</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+      Shows raw (non-encrypted) cookie values with hex dump, decoded forms, and
+      flag pattern matches. Encrypted values are excluded — they require OS-level
+      DPAPI/Keychain access not available in offline CTF profile analysis.
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Filter host</div>
+        <input class="bfx-invest-input" type="text" id="ctfCookieHost"
+               placeholder="e.g. example.com" style="width:160px;margin-bottom:0;">
+      </div>
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:4px;">Filter name</div>
+        <input class="bfx-invest-input" type="text" id="ctfCookieName"
+               placeholder="e.g. session" style="width:140px;margin-bottom:0;">
+      </div>
+      <button class="bfx-btn sm" onclick="ctfRunCookieInspect()" id="ctfCookieRunBtn">Inspect</button>
+    </div>
+  </div>
+
+  <div id="ctfCookieResults">
+    <div class="muted" style="font-size:12px;padding:8px 0;">Click Inspect to load cookie values.</div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/ctf.js"></script>
+<script>
+  // Load stat cards on page load
+  fetch('/api/ctf/summary').then(r => r.json()).then(d => {
+    document.getElementById('ctfStatFlags').textContent     = d.flag_hits     ?? '—';
+    document.getElementById('ctfStatEncoded').textContent   = d.encoded_fields ?? '—';
+    document.getElementById('ctfStatParams').textContent    = d.url_params     ?? '—';
+    document.getElementById('ctfStatArtifacts').textContent = d.total_artifacts ?? '—';
+  }).catch(() => {});
+</script>
+{% endblock %}

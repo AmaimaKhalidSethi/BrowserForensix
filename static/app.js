@@ -224,15 +224,6 @@ function toggleTheme() {
   } catch (_) { /* localStorage blocked — still apply in memory */ }
 
   _applyTheme(next, true); // true = allow 0.3s CSS transition
-
-  // Re-render the heatmap if it's visible — it uses JS-injected inline colours
-  // that don't respond to CSS variable changes, so we must re-build it.
-  if (typeof loadOverview === 'function' && document.getElementById('activityHeatmap')) {
-    // Only re-render the heatmap portion, not the whole overview
-    API.get('/api/overview').then(data => {
-      if (data?.heatmap) renderHeatmap(data.heatmap);
-    });
-  }
 }
 
 /**
@@ -388,15 +379,8 @@ function renderHeatmap(heatData) {
   const elHeat = document.getElementById('activityHeatmap');
   if (!elHeat) return;
   const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  // 5-stop purple scale: theme-aware. Dark = deep indigo→lavender; Light = cream→deep violet.
-  const isWarm = document.documentElement.getAttribute('data-theme') === 'warm';
-  const STOPS = isWarm ? [
-    '#F3EEE8',   // 0 — empty cell (warm cream, matches bg-surface)
-    '#DDD0F5',   // 1 — low  (soft lavender)
-    '#B89EE8',   // 2 — mid  (muted purple)
-    '#8B6DC8',   // 3 — high (medium violet)
-    '#5B21B6',   // 4 — peak (deep violet)
-  ] : [
+  // 5-stop purple scale: empty → deep indigo → rich violet → bright purple → vivid lavender
+  const STOPS = [
     '#13102A',   // 0 — empty cell (near-black violet)
     '#2D1B69',   // 1 — low  (deep indigo)
     '#5B21B6',   // 2 — mid  (rich violet)
@@ -416,7 +400,12 @@ function renderHeatmap(heatData) {
     return STOPS[Math.min(4, Math.max(1, Math.ceil((v / maxVal) * 4)))];
   }
 
-  let html = `<div class="bfx-heatmap">`;
+  // Store for modal re-render (no second API call needed)
+  _heatmapData = heatData;
+
+  // Wrap in scroll container + make clickable to open modal
+  let html = `<div class="bfx-heatmap-wrap bfx-heatmap-clickable" onclick="openHeatmapModal()" title="Click to expand">`;
+  html += `<div class="bfx-heatmap">`;
   html += `<div class="bfx-heatmap-header"></div>`;
   for (let h = 0; h < 24; h++) {
     html += `<div class="bfx-heatmap-header">${h % 4 === 0 ? h : ''}</div>`;
@@ -428,8 +417,16 @@ function renderHeatmap(heatData) {
       html += `<div class="bfx-heatmap-cell" title="${d} ${h}:00 — ${v} visits" style="background:${cellColor(v)};"></div>`;
     }
   });
-  html += '</div>';
+  html += '</div></div>';
   elHeat.innerHTML = html;
+
+  // Expand hint below mini heatmap
+  if (!elHeat.nextElementSibling?.classList.contains('bfx-heatmap-expand-hint')) {
+    const hint = document.createElement('div');
+    hint.className = 'bfx-heatmap-expand-hint';
+    hint.textContent = '⊕ click to expand';
+    elHeat.after(hint);
+  }
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
@@ -1088,3 +1085,145 @@ async function aiExplainAnomaly(anomalyType, containerId) {
   _aiAnomalyCache[containerId] = true;
   await _aiInlineFetch(el, `/api/ai/anomaly?type=${encodeURIComponent(anomalyType)}`, 'deep_dive');
 }
+
+// ── Heatmap Modal ─────────────────────────────────────────────────────────────
+// Clicking the mini heatmap opens a full-size modal with blurred backdrop.
+// _heatmapData is set by renderHeatmap() so the modal can re-render at
+// full size without making another API call.
+
+let _heatmapData = null;
+
+function _heatmapIsWarm() {
+  return document.documentElement.getAttribute('data-theme') === 'warm';
+}
+
+function _heatmapStops() {
+  return _heatmapIsWarm()
+    ? ['#F3EEE8','#DDD0F5','#B89EE8','#8B6DC8','#5B21B6']
+    : ['#13102A','#2D1B69','#5B21B6','#8B45F5','#C084FC'];
+}
+
+function _heatmapCellColor(val, maxVal) {
+  const stops = _heatmapStops();
+  if (!val || val === 0) return stops[0];
+  const ratio = Math.min(val / maxVal, 1);
+  const idx   = Math.ceil(ratio * (stops.length - 1));
+  return stops[Math.max(1, idx)];
+}
+
+function openHeatmapModal() {
+  if (!_heatmapData) return;
+
+  const existing = document.getElementById('bfxHeatmapModal');
+  if (existing) existing.remove();
+
+  const days    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const heatData = _heatmapData;
+  const map     = {};
+  let   totalVisits = 0, peakVal = 0, peakLabel = '';
+
+  heatData.forEach(d => {
+    if (!map[d.day]) map[d.day] = {};
+    map[d.day][d.hour] = d.count;
+    totalVisits += d.count;
+    if (d.count > peakVal) {
+      peakVal   = d.count;
+      peakLabel = `${days[d.day] || d.day} ${String(d.hour).padStart(2,'0')}:00`;
+    }
+  });
+
+  const maxVal = Math.max(...heatData.map(d => d.count), 1);
+
+  // Find busiest day
+  const dayTotals = days.map((_, di) =>
+    Object.values(map[di] || {}).reduce((a, b) => a + b, 0)
+  );
+  const busiestDay = days[dayTotals.indexOf(Math.max(...dayTotals))] || '—';
+
+  // Find busiest hour
+  const hourTotals = Array.from({length:24}, (_, h) =>
+    days.reduce((sum, _, di) => sum + ((map[di] || {})[h] || 0), 0)
+  );
+  const busiestHour = hourTotals.indexOf(Math.max(...hourTotals));
+
+  // Build full-size grid
+  let grid = `<div class="bfx-heatmap-modal-grid">`;
+  grid += `<div class="bfx-heatmap-modal-header"></div>`;
+  for (let h = 0; h < 24; h++) {
+    grid += `<div class="bfx-heatmap-modal-header">${h % 3 === 0 ? String(h).padStart(2,'0') : ''}</div>`;
+  }
+  days.forEach((d, di) => {
+    grid += `<div class="bfx-heatmap-modal-label">${d}</div>`;
+    for (let h = 0; h < 24; h++) {
+      const v   = (map[di] || {})[h] || 0;
+      const col = _heatmapCellColor(v, maxVal);
+      const tip = `${d} ${String(h).padStart(2,'0')}:00 — ${v.toLocaleString()} visit${v !== 1 ? 's' : ''}`;
+      grid += `<div class="bfx-heatmap-modal-cell" title="${tip}" style="background:${col};"></div>`;
+    }
+  });
+  grid += `</div>`;
+
+  // Legend swatches
+  const stops   = _heatmapStops();
+  const swatches = stops.map(c =>
+    `<span class="bfx-heatmap-modal-legend-swatch" style="background:${c};"></span>`
+  ).join('');
+
+  // Stats row
+  const stats = [
+    { label: 'Total Visits',   val: totalVisits.toLocaleString() },
+    { label: 'Busiest Day',    val: busiestDay },
+    { label: 'Busiest Hour',   val: `${String(busiestHour).padStart(2,'0')}:00` },
+    { label: 'Peak Window',    val: peakLabel || '—' },
+    { label: 'Peak Count',     val: peakVal.toLocaleString() },
+  ].map(s => `
+    <div class="bfx-heatmap-modal-stat">
+      <div class="bfx-heatmap-modal-stat-label">${s.label}</div>
+      <div class="bfx-heatmap-modal-stat-val">${s.val}</div>
+    </div>`).join('');
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'bfx-heatmap-modal-backdrop';
+  backdrop.id = 'bfxHeatmapModal';
+  backdrop.innerHTML = `
+    <div class="bfx-heatmap-modal" role="dialog" aria-modal="true" aria-label="Activity Heatmap">
+      <div class="bfx-heatmap-modal-head">
+        <div>
+          <span class="bfx-heatmap-modal-title">Activity Heatmap</span>
+          <span class="bfx-heatmap-modal-sub">visits by day × hour (UTC)</span>
+        </div>
+        <button class="bfx-heatmap-modal-close" onclick="closeHeatmapModal()" title="Close (Esc)">✕</button>
+      </div>
+      ${grid}
+      <div class="bfx-heatmap-modal-legend">
+        <span>Low</span>
+        <div class="bfx-heatmap-modal-legend-swatches">${swatches}</div>
+        <span>High</span>
+      </div>
+      <div class="bfx-heatmap-modal-stats">${stats}</div>
+    </div>`;
+
+  document.body.appendChild(backdrop);
+
+  // Close on backdrop click (not on modal card itself)
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop) closeHeatmapModal();
+  });
+
+  // Animate in next frame
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => backdrop.classList.add('open'));
+  });
+}
+
+function closeHeatmapModal() {
+  const el = document.getElementById('bfxHeatmapModal');
+  if (!el) return;
+  el.classList.remove('open');
+  el.addEventListener('transitionend', () => el.remove(), { once: true });
+}
+
+// Close on Escape key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeHeatmapModal();
+});

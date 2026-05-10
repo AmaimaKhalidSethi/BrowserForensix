@@ -42,6 +42,12 @@ except ImportError:
     _AI_AVAILABLE = False
     print("[WARN] ai_routes.py not found — AI features disabled")
 
+try:
+    from ctf_routes import register_ctf_routes
+    _CTF_AVAILABLE = True
+except ImportError:
+    _CTF_AVAILABLE = False
+
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 EVIDENCE_FILE = DATA_DIR / "evidence.json"
@@ -701,6 +707,22 @@ def api_report():
     })
 
 
+# ── API: Gap detector (lightweight) ──────────────────────────────────────────
+
+@app.route("/api/gap")
+def api_gap():
+    """
+    Returns only the history_gap anomaly — lightweight alternative to
+    /api/overview used by loadGapDetector() in app.js (FIX-JS-6).
+    Previously app.js fetched the full /api/overview payload (heatmap,
+    top domains, all anomalies) just to find this one anomaly.
+    """
+    data = load_analysis()
+    anomalies = data.get("anomalies", [])
+    gap = next((a for a in anomalies if a.get("type") == "history_gap"), None)
+    return jsonify({"gap": gap})
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 def startup():
@@ -720,6 +742,9 @@ def startup():
         register_ai_routes(app, load_analysis)
     else:
         print("[INFO] AI features not available — add ai_engine.py and ai_routes.py")
+
+    if _CTF_AVAILABLE:
+        register_ctf_routes(app, load_analysis)
 
     print("[INFO] Starting Flask on http://localhost:5000")
     threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5000")).start()

@@ -34,6 +34,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from leveldb_reader import read_all_storage as _read_leveldb
+    _LEVELDB_AVAILABLE = True
+except ImportError:
+    _LEVELDB_AVAILABLE = False
+    
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
@@ -565,6 +572,7 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
         "cookies": [],
         "bookmarks": [],
         "downloads": [],
+        "local_storage": [],
     }
 
     # ── Chrome / Edge ──────────────────────────────────────────────────────────
@@ -593,6 +601,16 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
             evidence["cookies"]   += extract_chrome_cookies(profile, label)
             evidence["bookmarks"] += extract_chrome_bookmarks(profile, label)
             evidence["downloads"] += extract_chrome_downloads(profile, label)
+
+            # localStorage / sessionStorage / extension state via LevelDB
+            if _LEVELDB_AVAILABLE:
+                try:
+                    ls = _read_leveldb(profile)
+                    for entry in ls:
+                        entry["profile"] = label
+                    evidence["local_storage"] += ls
+                except Exception as _e:
+                    log.warning(f"{label} LevelDB: {_e}")
             # NOTE: History DB is copied once inside each extractor. Both history
             # and downloads extractors copy it independently for snapshot consistency.
             # If disk I/O is a concern use --profile to extract a single profile.
@@ -639,7 +657,7 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
         log.warning("Safari extraction: basic stub. Full plist/binary cookie parsing not yet implemented.")
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads"))
+    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads", "local_storage"))
     evidence["meta"]["total_artifacts"] = total
     evidence["meta"]["profile_path"] = (
         ", ".join(p["path"] for p in evidence["meta"]["profiles_extracted"])

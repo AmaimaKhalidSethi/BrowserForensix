@@ -154,7 +154,7 @@ def score_cookie(cookie: Dict, domain_history_count: int) -> Tuple[int, List[str
     host = cookie.get("host", "")
     expires = cookie.get("expires", "")
     created = cookie.get("created", "")
-    secure = cookie.get("secure", True)
+    secure = cookie.get("secure", False)  # FIX-AN-3: absent key = not secure
     name = cookie.get("name", "").lower()
 
     if expires and _is_expired(expires):
@@ -358,6 +358,37 @@ def detect_burst_activity(
     return bursts
 
 
+def _circular_mean(hours: list) -> float:
+    """
+    FIX-AN-1: Circular mean for hours (0-23).
+    Standard mean is wrong when activity straddles midnight —
+    hours [22,23,0,1] have arithmetic mean ~11.5, not ~0.
+    Circular mean projects onto unit circle and takes atan2.
+    """
+    import math
+    n = len(hours)
+    sin_sum = sum(math.sin(2 * math.pi * h / 24) for h in hours)
+    cos_sum = sum(math.cos(2 * math.pi * h / 24) for h in hours)
+    mean_rad = math.atan2(sin_sum / n, cos_sum / n)
+    return (math.degrees(mean_rad) * 24 / 360) % 24
+
+
+def _circular_stdev(hours: list, mean_hour: float) -> float:
+    """
+    FIX-AN-1: Circular standard deviation for hours (0-23).
+    Uses mean resultant length R — R=1 means all hours identical,
+    R=0 means uniform distribution. stdev = sqrt(-2 * ln(R)).
+    """
+    import math
+    n = len(hours)
+    sin_sum = sum(math.sin(2 * math.pi * h / 24) for h in hours)
+    cos_sum = sum(math.cos(2 * math.pi * h / 24) for h in hours)
+    R = math.sqrt((sin_sum / n) ** 2 + (cos_sum / n) ** 2)
+    R = max(1e-10, min(R, 1 - 1e-10))  # clamp to avoid log(0) / log(1)
+    # Convert from radians on [0,2π] to hours on [0,24]
+    return math.sqrt(-2 * math.log(R)) * 24 / (2 * math.pi)
+
+
 def detect_offhours_activity(history: List[Dict]) -> Optional[Dict]:
     hours = []
     for h in history:
@@ -368,9 +399,11 @@ def detect_offhours_activity(history: List[Dict]) -> Optional[Dict]:
     if len(hours) < 50:
         return None
 
-    mean_hour = statistics.mean(hours)
-    stdev_hour = statistics.stdev(hours)
-    if stdev_hour == 0:
+    # FIX-AN-1: Use circular mean/stdev — correct for hour distributions
+    # that straddle midnight (e.g. a night-shift user active at 22:00-02:00).
+    mean_hour  = _circular_mean(hours)
+    stdev_hour = _circular_stdev(hours, mean_hour)
+    if stdev_hour < 0.1:
         return None
 
     threshold = 2.0
