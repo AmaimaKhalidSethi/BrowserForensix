@@ -1,30 +1,4 @@
-/* BrowserForensix — app.js  (PATCHED)
-   All frontend logic. API calls, rendering, state management.
 
-PATCH NOTES:
-  FIX-3  Removed dead SPA navigation system (activatePage, PAGES, the
-         DOMContentLoaded nav-click handler that called loadStatus() → activatePage()).
-         Flask renders each page as a full HTML document; there are no .bfx-page
-         divs to toggle. The SPA router was firing loadStatus() a second time on
-         every page load (base.html already calls it via /api/status inline script).
-
-  FIX-COOKIES-HOST  cookieState now tracks host; loadCookies() sends it as a
-         query param; cookieHostSearch input correctly sets cookieState.host.
-         The host filter was silently broken end-to-end — state was never set,
-         param was never sent to the API.
-
-  FIX-COOKIES-SECURE  cookieState.secure is now sent to the API and the
-         #cookieSecureFilter dropdown actually applies the filter.
-
-  FIX-REPORT  window._bfxReport replaced with a module-scoped variable
-         _reportText so forensic report content is not accessible to any
-         third-party script that might later run on the page.
-
-  NOTE: loadStatus() is called once in base.html's inline script (topbar meta
-        update). The DOMContentLoaded handler here no longer calls it a second
-        time. If you move the inline script out of base.html in a future refactor,
-        re-add loadStatus() to the DOMContentLoaded block below.
-*/
 
 'use strict';
 
@@ -375,18 +349,26 @@ function renderDomainList(domains) {
   }).join('');
 }
 
+// ── Heatmap Modal globals ─────────────────────────────────────────────────────
+let _heatmapData = null;
+
+function _heatmapIsWarm() {
+  return document.documentElement.getAttribute('data-theme') === 'warm';
+}
+
+function _heatmapStops() {
+  return _heatmapIsWarm()
+    ? ['#F3EEE8','#DDD0F5','#B89EE8','#8B6DC8','#5B21B6']  // warm light mode
+    : ['#13102A','#2D1B69','#5B21B6','#8B45F5','#C084FC'];  // dark mode
+}
+
 function renderHeatmap(heatData) {
   const elHeat = document.getElementById('activityHeatmap');
   if (!elHeat) return;
-  const days   = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  // 5-stop purple scale: empty → deep indigo → rich violet → bright purple → vivid lavender
-  const STOPS = [
-    '#13102A',   // 0 — empty cell (near-black violet)
-    '#2D1B69',   // 1 — low  (deep indigo)
-    '#5B21B6',   // 2 — mid  (rich violet)
-    '#8B45F5',   // 3 — high (bright purple)
-    '#C084FC',   // 4 — peak (vivid lavender)
-  ];
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  // Store for modal — no second API call needed when expanding
+  _heatmapData = heatData;
 
   const map = {};
   heatData.forEach(({ day, hour, count }) => {
@@ -396,15 +378,14 @@ function renderHeatmap(heatData) {
   const maxVal = Math.max(...heatData.map(d => d.count), 1);
 
   function cellColor(v) {
+    const STOPS = _heatmapStops();
     if (!v) return STOPS[0];
     return STOPS[Math.min(4, Math.max(1, Math.ceil((v / maxVal) * 4)))];
   }
 
-  // Store for modal re-render (no second API call needed)
-  _heatmapData = heatData;
-
-  // Wrap in scroll container + make clickable to open modal
-  let html = `<div class="bfx-heatmap-wrap bfx-heatmap-clickable" onclick="openHeatmapModal()" title="Click to expand">`;
+  // Scroll wrapper + clickable to open modal (FIX: min-width prevents crush)
+  let html = `<div class="bfx-heatmap-wrap bfx-heatmap-clickable"
+                    onclick="openHeatmapModal()" title="Click to expand">`;
   html += `<div class="bfx-heatmap">`;
   html += `<div class="bfx-heatmap-header"></div>`;
   for (let h = 0; h < 24; h++) {
@@ -414,7 +395,8 @@ function renderHeatmap(heatData) {
     html += `<div class="bfx-heatmap-label">${d}</div>`;
     for (let h = 0; h < 24; h++) {
       const v = (map[di] || {})[h] || 0;
-      html += `<div class="bfx-heatmap-cell" title="${d} ${h}:00 — ${v} visits" style="background:${cellColor(v)};"></div>`;
+      html += `<div class="bfx-heatmap-cell" title="${d} ${h}:00 — ${v} visits"
+                    style="background:${cellColor(v)};"></div>`;
     }
   });
   html += '</div></div>';
@@ -428,6 +410,135 @@ function renderHeatmap(heatData) {
     elHeat.after(hint);
   }
 }
+
+// ── Heatmap Modal ─────────────────────────────────────────────────────────────
+
+function openHeatmapModal() {
+  if (!_heatmapData) return;
+
+  const existing = document.getElementById('bfxHeatmapModal');
+  if (existing) existing.remove();
+
+  const days    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const heatData = _heatmapData;
+  const map     = {};
+  let totalVisits = 0, peakVal = 0, peakLabel = '';
+
+  heatData.forEach(d => {
+    if (!map[d.day]) map[d.day] = {};
+    map[d.day][d.hour] = d.count;
+    totalVisits += d.count;
+    if (d.count > peakVal) {
+      peakVal   = d.count;
+      peakLabel = `${days[d.day] || d.day} ${String(d.hour).padStart(2,'0')}:00`;
+    }
+  });
+
+  const maxVal = Math.max(...heatData.map(d => d.count), 1);
+  const stops  = _heatmapStops();
+
+  function modalCellColor(v) {
+    if (!v) return stops[0];
+    return stops[Math.min(4, Math.max(1, Math.ceil((v / maxVal) * 4)))];
+  }
+
+  // Busiest day
+  const dayTotals = days.map((_, di) =>
+    Object.values(map[di] || {}).reduce((a,b) => a+b, 0)
+  );
+  const busiestDay = days[dayTotals.indexOf(Math.max(...dayTotals))] || '—';
+
+  // Busiest hour
+  const hourTotals = Array.from({length:24}, (_,h) =>
+    days.reduce((sum,_,di) => sum + ((map[di]||{})[h]||0), 0)
+  );
+  const busiestHour = hourTotals.indexOf(Math.max(...hourTotals));
+
+  // Full-size grid
+  let grid = `<div class="bfx-heatmap-modal-grid">`;
+  grid += `<div class="bfx-heatmap-modal-header"></div>`;
+  for (let h = 0; h < 24; h++) {
+    grid += `<div class="bfx-heatmap-modal-header">${h % 3 === 0 ? String(h).padStart(2,'0') : ''}</div>`;
+  }
+  days.forEach((d, di) => {
+    grid += `<div class="bfx-heatmap-modal-label">${d}</div>`;
+    for (let h = 0; h < 24; h++) {
+      const v   = (map[di]||{})[h] || 0;
+      const tip = `${d} ${String(h).padStart(2,'0')}:00 — ${v.toLocaleString()} visit${v!==1?'s':''}`;
+      grid += `<div class="bfx-heatmap-modal-cell" title="${tip}"
+                    style="background:${modalCellColor(v)};"></div>`;
+    }
+  });
+  grid += `</div>`;
+
+  // Legend swatches
+  const swatches = stops.map(c =>
+    `<span class="bfx-heatmap-modal-legend-swatch" style="background:${c};"></span>`
+  ).join('');
+
+  // Stats row
+  const stats = [
+    { label:'Total Visits',  val: totalVisits.toLocaleString() },
+    { label:'Busiest Day',   val: busiestDay },
+    { label:'Busiest Hour',  val: `${String(busiestHour).padStart(2,'0')}:00` },
+    { label:'Peak Window',   val: peakLabel || '—' },
+    { label:'Peak Count',    val: peakVal.toLocaleString() },
+  ].map(s => `
+    <div class="bfx-heatmap-modal-stat">
+      <div class="bfx-heatmap-modal-stat-label">${s.label}</div>
+      <div class="bfx-heatmap-modal-stat-val">${s.val}</div>
+    </div>`).join('');
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'bfx-heatmap-modal-backdrop';
+  backdrop.id = 'bfxHeatmapModal';
+  backdrop.innerHTML = `
+    <div class="bfx-heatmap-modal" role="dialog" aria-modal="true" aria-label="Activity Heatmap">
+      <div class="bfx-heatmap-modal-head">
+        <div>
+          <span class="bfx-heatmap-modal-title">Activity Heatmap</span>
+          <span class="bfx-heatmap-modal-sub">visits by day × hour (UTC)</span>
+        </div>
+        <button class="bfx-heatmap-modal-close" onclick="closeHeatmapModal()" title="Close (Esc)">✕</button>
+      </div>
+      ${grid}
+      <div class="bfx-heatmap-modal-legend">
+        <span>Low</span>
+        <div class="bfx-heatmap-modal-legend-swatches">${swatches}</div>
+        <span>High</span>
+      </div>
+      <div class="bfx-heatmap-modal-stats">${stats}</div>
+    </div>`;
+
+  document.body.appendChild(backdrop);
+
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop) closeHeatmapModal();
+  });
+
+  requestAnimationFrame(() => requestAnimationFrame(() => backdrop.classList.add('open')));
+}
+
+function closeHeatmapModal() {
+  const el = document.getElementById('bfxHeatmapModal');
+  if (!el) return;
+  el.classList.remove('open');
+  el.addEventListener('transitionend', () => el.remove(), { once: true });
+}
+
+// Re-render heatmap on theme toggle so JS-injected colours update
+const _origToggleTheme = window.toggleTheme;
+window.toggleTheme = function() {
+  if (typeof _origToggleTheme === 'function') _origToggleTheme();
+  if (_heatmapData && document.getElementById('activityHeatmap')) {
+    renderHeatmap(_heatmapData);
+  }
+};
+
+// Close modal on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeHeatmapModal();
+});
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -1085,145 +1196,3 @@ async function aiExplainAnomaly(anomalyType, containerId) {
   _aiAnomalyCache[containerId] = true;
   await _aiInlineFetch(el, `/api/ai/anomaly?type=${encodeURIComponent(anomalyType)}`, 'deep_dive');
 }
-
-// ── Heatmap Modal ─────────────────────────────────────────────────────────────
-// Clicking the mini heatmap opens a full-size modal with blurred backdrop.
-// _heatmapData is set by renderHeatmap() so the modal can re-render at
-// full size without making another API call.
-
-let _heatmapData = null;
-
-function _heatmapIsWarm() {
-  return document.documentElement.getAttribute('data-theme') === 'warm';
-}
-
-function _heatmapStops() {
-  return _heatmapIsWarm()
-    ? ['#F3EEE8','#DDD0F5','#B89EE8','#8B6DC8','#5B21B6']
-    : ['#13102A','#2D1B69','#5B21B6','#8B45F5','#C084FC'];
-}
-
-function _heatmapCellColor(val, maxVal) {
-  const stops = _heatmapStops();
-  if (!val || val === 0) return stops[0];
-  const ratio = Math.min(val / maxVal, 1);
-  const idx   = Math.ceil(ratio * (stops.length - 1));
-  return stops[Math.max(1, idx)];
-}
-
-function openHeatmapModal() {
-  if (!_heatmapData) return;
-
-  const existing = document.getElementById('bfxHeatmapModal');
-  if (existing) existing.remove();
-
-  const days    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const heatData = _heatmapData;
-  const map     = {};
-  let   totalVisits = 0, peakVal = 0, peakLabel = '';
-
-  heatData.forEach(d => {
-    if (!map[d.day]) map[d.day] = {};
-    map[d.day][d.hour] = d.count;
-    totalVisits += d.count;
-    if (d.count > peakVal) {
-      peakVal   = d.count;
-      peakLabel = `${days[d.day] || d.day} ${String(d.hour).padStart(2,'0')}:00`;
-    }
-  });
-
-  const maxVal = Math.max(...heatData.map(d => d.count), 1);
-
-  // Find busiest day
-  const dayTotals = days.map((_, di) =>
-    Object.values(map[di] || {}).reduce((a, b) => a + b, 0)
-  );
-  const busiestDay = days[dayTotals.indexOf(Math.max(...dayTotals))] || '—';
-
-  // Find busiest hour
-  const hourTotals = Array.from({length:24}, (_, h) =>
-    days.reduce((sum, _, di) => sum + ((map[di] || {})[h] || 0), 0)
-  );
-  const busiestHour = hourTotals.indexOf(Math.max(...hourTotals));
-
-  // Build full-size grid
-  let grid = `<div class="bfx-heatmap-modal-grid">`;
-  grid += `<div class="bfx-heatmap-modal-header"></div>`;
-  for (let h = 0; h < 24; h++) {
-    grid += `<div class="bfx-heatmap-modal-header">${h % 3 === 0 ? String(h).padStart(2,'0') : ''}</div>`;
-  }
-  days.forEach((d, di) => {
-    grid += `<div class="bfx-heatmap-modal-label">${d}</div>`;
-    for (let h = 0; h < 24; h++) {
-      const v   = (map[di] || {})[h] || 0;
-      const col = _heatmapCellColor(v, maxVal);
-      const tip = `${d} ${String(h).padStart(2,'0')}:00 — ${v.toLocaleString()} visit${v !== 1 ? 's' : ''}`;
-      grid += `<div class="bfx-heatmap-modal-cell" title="${tip}" style="background:${col};"></div>`;
-    }
-  });
-  grid += `</div>`;
-
-  // Legend swatches
-  const stops   = _heatmapStops();
-  const swatches = stops.map(c =>
-    `<span class="bfx-heatmap-modal-legend-swatch" style="background:${c};"></span>`
-  ).join('');
-
-  // Stats row
-  const stats = [
-    { label: 'Total Visits',   val: totalVisits.toLocaleString() },
-    { label: 'Busiest Day',    val: busiestDay },
-    { label: 'Busiest Hour',   val: `${String(busiestHour).padStart(2,'0')}:00` },
-    { label: 'Peak Window',    val: peakLabel || '—' },
-    { label: 'Peak Count',     val: peakVal.toLocaleString() },
-  ].map(s => `
-    <div class="bfx-heatmap-modal-stat">
-      <div class="bfx-heatmap-modal-stat-label">${s.label}</div>
-      <div class="bfx-heatmap-modal-stat-val">${s.val}</div>
-    </div>`).join('');
-
-  const backdrop = document.createElement('div');
-  backdrop.className = 'bfx-heatmap-modal-backdrop';
-  backdrop.id = 'bfxHeatmapModal';
-  backdrop.innerHTML = `
-    <div class="bfx-heatmap-modal" role="dialog" aria-modal="true" aria-label="Activity Heatmap">
-      <div class="bfx-heatmap-modal-head">
-        <div>
-          <span class="bfx-heatmap-modal-title">Activity Heatmap</span>
-          <span class="bfx-heatmap-modal-sub">visits by day × hour (UTC)</span>
-        </div>
-        <button class="bfx-heatmap-modal-close" onclick="closeHeatmapModal()" title="Close (Esc)">✕</button>
-      </div>
-      ${grid}
-      <div class="bfx-heatmap-modal-legend">
-        <span>Low</span>
-        <div class="bfx-heatmap-modal-legend-swatches">${swatches}</div>
-        <span>High</span>
-      </div>
-      <div class="bfx-heatmap-modal-stats">${stats}</div>
-    </div>`;
-
-  document.body.appendChild(backdrop);
-
-  // Close on backdrop click (not on modal card itself)
-  backdrop.addEventListener('click', e => {
-    if (e.target === backdrop) closeHeatmapModal();
-  });
-
-  // Animate in next frame
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => backdrop.classList.add('open'));
-  });
-}
-
-function closeHeatmapModal() {
-  const el = document.getElementById('bfxHeatmapModal');
-  if (!el) return;
-  el.classList.remove('open');
-  el.addEventListener('transitionend', () => el.remove(), { once: true });
-}
-
-// Close on Escape key
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeHeatmapModal();
-});

@@ -3,17 +3,11 @@
 BrowserForensix — ai_engine.py
 OpenRouter AI integration. Provides forensic intelligence across all pages.
 
-Architecture:
-  - All AI calls go through OpenRouter (https://openrouter.ai/api/v1)
-  - Model: meta-llama/llama-3.3-70b-instruct  (fast, cheap, forensics-capable)
-  - Fallback: mistralai/mistral-7b-instruct    (if primary is unavailable)
-  - Each function receives pre-structured data from analysis.json
-  - Returns structured dicts so serve.py routes can JSON-encode them directly
-  - Streaming supported on /api/ai/stream/* endpoints
-
-Environment:
-  OPENROUTER_API_KEY  — required. Set in .env or environment.
-  OPENROUTER_MODEL    — optional override.
+FIX-9: urllib.request.urlopen now passes timeout=60 (was missing entirely).
+        Without a timeout, a hung OpenRouter connection kept aiStreaming=true
+        permanently, locking the send button for the entire browser session.
+        60 s is generous for normal use; streaming routes will still yield
+        incremental deltas well within that window.
 """
 
 import json
@@ -23,19 +17,20 @@ import time
 from pathlib import Path
 from typing import Generator, Optional
 
-try:
-    import urllib.request
-    import urllib.error
-except ImportError:
-    pass
+import urllib.request
+import urllib.error
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-OPENROUTER_BASE   = "https://openrouter.ai/api/v1"
-PRIMARY_MODEL     = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
-FALLBACK_MODEL    = "mistralai/mistral-7b-instruct"
-APP_URL           = "http://localhost:5000"
-APP_NAME          = "BrowserForensix"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+PRIMARY_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+FALLBACK_MODEL  = "mistralai/mistral-7b-instruct"
+APP_URL         = "http://localhost:5000"
+APP_NAME        = "BrowserForensix"
+
+# Request timeout in seconds.
+# FIX-9: was absent — urlopen blocked indefinitely on hung connections.
+_REQUEST_TIMEOUT = 60
 
 # Load .env if present
 _env_path = Path(__file__).parent / ".env"
@@ -46,6 +41,7 @@ if _env_path.exists():
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip())
 
+
 def _api_key() -> str:
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if not key:
@@ -55,30 +51,36 @@ def _api_key() -> str:
         )
     return key
 
-# ── Low-level HTTP (no external deps beyond stdlib) ───────────────────────────
 
-def _post(payload: dict, stream: bool = False, model: str = PRIMARY_MODEL) -> dict | Generator:
+# ── Low-level HTTP ────────────────────────────────────────────────────────────
+
+def _post(payload: dict, stream: bool = False, model: str = PRIMARY_MODEL) -> "dict | Generator":
     """
-    POST to OpenRouter. Uses stdlib urllib so no `requests` dependency.
-    Returns parsed JSON dict (non-stream) or line generator (stream).
+    POST to OpenRouter via stdlib urllib.
+    Returns parsed JSON dict (non-stream) or a line generator (stream).
+
+    FIX-9: timeout=_REQUEST_TIMEOUT passed to urlopen on every call.
+    Previously timeout was omitted so a hung connection would block forever,
+    keeping aiStreaming=True and locking the UI send button indefinitely.
     """
     payload = {**payload, "model": model}
-    body = json.dumps(payload).encode()
+    body    = json.dumps(payload).encode()
 
     req = urllib.request.Request(
         f"{OPENROUTER_BASE}/chat/completions",
         data=body,
         headers={
-            "Authorization":   f"Bearer {_api_key()}",
-            "Content-Type":    "application/json",
-            "HTTP-Referer":    APP_URL,
-            "X-Title":         APP_NAME,
+            "Authorization": f"Bearer {_api_key()}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  APP_URL,
+            "X-Title":       APP_NAME,
         },
         method="POST",
     )
 
     try:
-        resp = urllib.request.urlopen(req, timeout=60)
+        # FIX-9: timeout added here — was urlopen(req) with no timeout argument.
+        resp = urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT)
     except urllib.error.HTTPError as e:
         body_text = e.read().decode(errors="replace")
         raise RuntimeError(f"OpenRouter {e.code}: {body_text}") from e
@@ -152,20 +154,14 @@ Use plain language — your output will be read by investigators, not developers
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 1: Overview — Executive AI Summary
-# Used by: /api/ai/summary
-# Shows on: Overview page, right-hand panel
+# FEATURE 1: Executive Summary
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_executive_summary(analysis: dict) -> dict:
-    """
-    Generate a plain-English forensic executive summary of the entire profile.
-    Covers: top risk findings, behavioral patterns, recommended next steps.
-    """
-    summary  = analysis.get("summary", {})
+    summary   = analysis.get("summary", {})
     anomalies = analysis.get("anomalies", [])[:10]
-    top_domains = analysis.get("top_domains", [])[:15]
-    flagged_history  = [h for h in analysis.get("history",  []) if h.get("risk_score", 0) >= 61][:10]
+    top_domains       = analysis.get("top_domains", [])[:15]
+    flagged_history   = [h for h in analysis.get("history",   []) if h.get("risk_score", 0) >= 61][:10]
     flagged_downloads = [d for d in analysis.get("downloads", []) if d.get("risk_score", 0) >= 61][:5]
 
     user_prompt = f"""Analyze this browser forensic data and produce an executive summary.
@@ -179,7 +175,7 @@ TOP ANOMALIES DETECTED:
 TOP DOMAINS BY VISITS:
 {json.dumps([{"domain": d["domain"], "visits": d["visits"], "risk_score": d["risk_score"]} for d in top_domains], indent=2)}
 
-FLAGGED HISTORY ITEMS (risk ≥ 61):
+FLAGGED HISTORY ITEMS (risk >= 61):
 {json.dumps([{"url": h["url"], "risk_score": h["risk_score"], "reasons": h.get("risk_reasons",[])} for h in flagged_history], indent=2)}
 
 FLAGGED DOWNLOADS:
@@ -191,22 +187,15 @@ Write a 3-5 paragraph forensic executive summary covering:
 3. Behavioral patterns observed
 4. Recommended investigative next steps
 """
-
     content = _chat(_FORENSIC_SYSTEM, user_prompt, max_tokens=800)
     return {"summary": content, "model": PRIMARY_MODEL, "generated_at": time.time()}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 2: History — AI Risk Explainer
-# Used by: /api/ai/explain/history/<url_hash>
-# Shows on: History page, expand row
+# FEATURE 2: History Item Explainer
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_explain_history_item(item: dict, context_items: list) -> dict:
-    """
-    Explain why a specific history item is risky and what it suggests forensically.
-    Context items = other visits to the same domain for pattern recognition.
-    """
     user_prompt = f"""A browser forensic tool flagged this history entry:
 
 URL: {item.get("url", "")}
@@ -229,16 +218,10 @@ In 3-5 sentences, explain:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 3: Investigate — AI Domain Profile
-# Used by: /api/ai/domain/<domain>
-# Shows on: Investigate page, Domain Inspector panel
+# FEATURE 3: Domain Profile
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_domain_profile(domain: str, domain_data: dict) -> dict:
-    """
-    Deep-dive analysis of a specific domain — what it is, why it matters,
-    what the visit/cookie/download pattern reveals.
-    """
     user_prompt = f"""Analyze this domain's forensic profile from a browser investigation:
 
 DOMAIN: {domain}
@@ -268,16 +251,10 @@ Provide:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 4: Investigate — AI Session Narrative (streaming)
-# Used by: /api/ai/stream/session
-# Shows on: Investigate > Session Viewer
+# FEATURE 4: Session Narrative (streaming)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_session_narrative_stream(session: dict) -> Generator:
-    """
-    Streaming narrative description of a reconstructed browsing session.
-    Tells the story of what the user was doing during that session.
-    """
     events = session.get("events", [])[:40]
     system_prompt = _FORENSIC_SYSTEM + "\nRespond in flowing prose, not lists. Tell the story of what happened."
 
@@ -306,17 +283,10 @@ Write a 2-3 paragraph narrative describing:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 5: Downloads — AI Threat Assessment
-# Used by: /api/ai/explain/download
-# Shows on: Downloads page, per-row expand
+# FEATURE 5: Download Threat Assessment
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_download_threat(download: dict, all_downloads: list) -> dict:
-    """
-    Assess a specific download's threat level — what the file likely is,
-    whether the source is credible, and what the pattern suggests.
-    """
-    # Find other downloads from same domain for pattern context
     src_domain = download.get("source_url", "")
     related = [d for d in all_downloads
                if d.get("source_url","") != download.get("source_url","")
@@ -350,16 +320,10 @@ Keep response to 3-4 sentences.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 6: Investigate — Cleared History AI Analysis
-# Used by: /api/ai/gap-analysis
-# Shows on: Investigate > Cleared History Detector
+# FEATURE 6: Gap / Cleared History Analysis
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_gap_analysis(gap_anomaly: dict, top_cookie_domains: list) -> dict:
-    """
-    Analyze the pattern of history clearing — when it happened, what survived,
-    and what that tells us about intent.
-    """
     user_prompt = f"""A browser forensic tool detected history clearing. Analyze the pattern:
 
 GAP ANOMALY:
@@ -371,7 +335,7 @@ DOMAINS WITH COOKIES BUT NO HISTORY (top 15):
 Answer:
 1. What does this pattern of surviving cookies suggest about WHEN history was cleared?
 2. Do the surviving cookie domains suggest a specific activity that was being concealed?
-3. What was likely being hidden? (be direct — if it looks like personal browsing, say so; if it looks like data exfiltration, say so)
+3. What was likely being hidden?
 4. What forensic steps should be taken to recover deleted history?
 """
     content = _chat(_FORENSIC_SYSTEM, user_prompt, max_tokens=500)
@@ -379,20 +343,14 @@ Answer:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 7: Report — AI Narrative Report (streaming)
-# Used by: /api/ai/stream/report
-# Shows on: Report page, alongside the structured .txt report
+# FEATURE 7: Narrative Report (streaming)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_narrative_report_stream(report_data: dict, case_meta: dict) -> Generator:
-    """
-    Stream a full narrative forensic report — professional prose suitable
-    for inclusion in a case file.
-    """
-    flagged = report_data.get("flagged", {})
+    flagged   = report_data.get("flagged", {})
     anomalies = report_data.get("anomalies", [])
-    summary = report_data.get("summary", {})
-    meta = report_data.get("meta", {})
+    summary   = report_data.get("summary", {})
+    meta      = report_data.get("meta", {})
 
     system_prompt = _FORENSIC_SYSTEM + (
         "\nWrite in formal forensic report style. Use section headers. "
@@ -423,7 +381,7 @@ FLAGGED DOWNLOADS ({len(flagged.get("downloads",[]))} items):
 
 Write a full forensic narrative report with these sections:
 1. EXECUTIVE SUMMARY
-2. SCOPE AND METHODOLOGY  
+2. SCOPE AND METHODOLOGY
 3. KEY FINDINGS
 4. ANOMALY ANALYSIS
 5. RISK ASSESSMENT
@@ -433,16 +391,10 @@ Write a full forensic narrative report with these sections:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 8: Anomaly — AI Anomaly Deep Dive
-# Used by: /api/ai/anomaly
-# Shows on: Overview anomaly list, expand per anomaly
+# FEATURE 8: Anomaly Deep Dive
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_anomaly_deep_dive(anomaly: dict, related_history: list, related_cookies: list) -> dict:
-    """
-    Deep-dive a single anomaly — explain what it means, what caused it,
-    and how serious it is in context.
-    """
     user_prompt = f"""Deep-dive this browser forensic anomaly:
 
 ANOMALY:
@@ -459,7 +411,7 @@ RELATED COOKIES ({len(related_cookies)} total, showing first 5):
 
 Provide:
 1. Plain-language explanation of what this anomaly means
-2. The most likely explanation (benign vs. suspicious)  
+2. The most likely explanation (benign vs. suspicious)
 3. Red flags that elevate concern
 4. Specific follow-up actions for an investigator
 Keep to 4-5 sentences total.
@@ -469,17 +421,10 @@ Keep to 4-5 sentences total.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FEATURE 9: AI Chat — Freeform Q&A about the evidence
-# Used by: /api/ai/stream/chat
-# Shows on: Dedicated AI Chat panel (new page: /ai)
+# FEATURE 9: AI Chat (streaming)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_chat_stream(user_message: str, conversation_history: list, analysis_snapshot: dict) -> Generator:
-    """
-    Freeform forensic Q&A. The analyst can ask any question about the evidence.
-    Full conversation history is passed for multi-turn coherence.
-    analysis_snapshot = lightweight summary of key findings (not full data).
-    """
     system_prompt = _FORENSIC_SYSTEM + f"""
 
 You have access to a browser forensic analysis with these key facts:
@@ -494,7 +439,7 @@ Answer questions about this specific evidence. If asked about something not in
 the data, say so clearly. Keep responses focused and investigatively useful."""
 
     messages = []
-    for turn in conversation_history[-8:]:  # last 8 turns for context window
+    for turn in conversation_history[-8:]:
         messages.append({"role": turn["role"], "content": turn["content"]})
     messages.append({"role": "user", "content": user_message})
 
@@ -518,7 +463,7 @@ the data, say so clearly. Keep responses focused and investigatively useful."""
 def check_connection() -> dict:
     """Verify API key is set and OpenRouter is reachable."""
     try:
-        _api_key()  # raises if missing
+        _api_key()
         result = _post({
             "messages": [{"role": "user", "content": "Reply with only the word: OK"}],
             "max_tokens": 5,

@@ -35,6 +35,33 @@
 
 </div>
 
+<!-- Relationship Graph -->
+<div class="bfx-section" style="margin-bottom:20px;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
+    <div class="bfx-section-title" style="margin-bottom:0;border:none;">Domain Relationship Graph</div>
+    <span id="graphLegendCounts" style="font-size:10px;color:var(--text-secondary);font-family:var(--font-mono);"></span>
+    <button class="bfx-btn outline sm" onclick="resetGraphLayout()" style="margin-left:auto;">↺ Reset Layout</button>
+    <button class="bfx-btn outline sm" onclick="loadRelationshipGraph()">↻ Reload</button>
+  </div>
+  <div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">
+    Domains connected by shared cookie scope (solid) and session co-occurrence (dashed).
+    Click any node to inspect it. Drag to reposition. Scroll to zoom.
+    <span style="margin-left:10px;">
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:rgba(239,68,68,0.85);vertical-align:middle;margin-right:3px;"></span>Flagged
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:rgba(245,158,11,0.80);vertical-align:middle;margin:0 3px;"></span>Moderate
+      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:rgba(139,69,245,0.70);vertical-align:middle;margin:0 3px;"></span>Normal
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#60A5FA;vertical-align:middle;margin:0 3px;"></span>Has cookie
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#F87171;vertical-align:middle;margin:0 3px;"></span>Has download
+    </span>
+  </div>
+  <div id="relationshipGraph"
+       style="width:100%;height:480px;background:var(--bg-surface);
+              border:1px solid var(--border-mid);border-radius:var(--radius-lg);
+              overflow:hidden;position:relative;">
+    <div class="bfx-loading">Loading graph…</div>
+  </div>
+</div>
+
 <!-- Session Viewer -->
 <div class="bfx-section">
   <div class="bfx-section-title">Session Viewer — Reconstructed Browsing Sessions</div>
@@ -70,6 +97,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/graph.js"></script>
 <script>
   document.getElementById('domainInspectInput')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') inspectDomain();
@@ -134,5 +162,6 @@
 
   loadInvestigate();
   loadGapDetector();
+  loadRelationshipGraph();
 </script>
 {% endblock %}

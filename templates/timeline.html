@@ -4,7 +4,6 @@
 
 {% block content %}
 
-<!-- Range + type controls -->
 <div class="bfx-filter-bar">
   <span class="bfx-filter-label">Range:</span>
   <button class="bfx-btn outline sm" id="tlBtn24h" onclick="setTlRange('24h', this)">Last 24h</button>
@@ -14,10 +13,10 @@
 
   <span class="bfx-filter-label" style="margin-left:12px;">Types:</span>
   <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
-    <input type="checkbox" id="tlTypeHistory" checked> History
+    <input type="checkbox" id="tlTypeHistory"  checked> History
   </label>
   <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
-    <input type="checkbox" id="tlTypeCookies" checked> Cookies
+    <input type="checkbox" id="tlTypeCookies"  checked> Cookies
   </label>
   <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
     <input type="checkbox" id="tlTypeDownloads" checked> Downloads
@@ -26,7 +25,6 @@
   <span style="margin-left:auto;" id="tlEventCount" class="muted" style="font-size:11px;"></span>
 </div>
 
-<!-- Colour key -->
 <div style="display:flex;gap:16px;margin-bottom:14px;font-size:11px;color:var(--text-secondary);">
   <span style="display:flex;align-items:center;gap:5px;">
     <span style="width:10px;height:10px;border-radius:50%;background:#8B6347;flex-shrink:0;"></span> History
@@ -43,8 +41,18 @@
   </span>
 </div>
 
-<!-- Sessions rendered here -->
-<div id="timelineList">
+<div style="display:flex;gap:6px;margin-bottom:14px;align-items:center;">
+  <span style="font-size:11px;color:var(--text-secondary);">View:</span>
+  <button class="bfx-btn sm"         id="tlViewLaneBtn"    onclick="setTlView('lane')">Lane View</button>
+  <button class="bfx-btn outline sm" id="tlViewSessionBtn" onclick="setTlView('session')">Session List</button>
+</div>
+
+<div id="tlLaneView" style="width:100%;overflow-x:auto;margin-bottom:16px;">
+  <div class="bfx-loading">Building lane view…</div>
+</div>
+
+<!-- Session list hidden by default; shown when user switches view -->
+<div id="timelineList" style="display:none;">
   <div class="bfx-loading">Building timeline…</div>
 </div>
 
@@ -52,47 +60,216 @@
 
 {% block scripts %}
 <script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let _tlView     = 'lane';
+  let _tlLastData = null;
+
+  // ── View switcher ──────────────────────────────────────────────────────────
+  function setTlView(v) {
+    _tlView = v;
+    document.getElementById('tlViewLaneBtn').className    = v === 'lane'    ? 'bfx-btn sm' : 'bfx-btn outline sm';
+    document.getElementById('tlViewSessionBtn').className = v === 'session' ? 'bfx-btn sm' : 'bfx-btn outline sm';
+    document.getElementById('tlLaneView').style.display   = v === 'lane'    ? '' : 'none';
+    document.getElementById('timelineList').style.display = v === 'session' ? '' : 'none';
+    if (v === 'lane' && _tlLastData) renderLaneView(_tlLastData);
+  }
+
+  // ── Lane View ──────────────────────────────────────────────────────────────
+  function renderLaneView(data) {
+    const el = document.getElementById('tlLaneView');
+    if (!el || !data?.sessions?.length) {
+      if (el) el.innerHTML = '<div class="bfx-loading muted">No events to display.</div>';
+      return;
+    }
+
+    const allEvents = data.sessions.flatMap(s => s.events || [])
+      .filter(e => e.time)
+      .sort((a, b) => new Date(a.time) - new Date(b.time));
+
+    if (!allEvents.length) {
+      el.innerHTML = '<div class="muted" style="padding:10px;font-size:12px;">No events with timestamps.</div>';
+      return;
+    }
+
+    const tMin  = new Date(allEvents[0].time).getTime();
+    const tMax  = new Date(allEvents[allEvents.length - 1].time).getTime();
+    const tSpan = Math.max(tMax - tMin, 1);
+
+    const LANES  = [
+      { type: 'history',  label: 'History',   color: '#8B6347' },
+      { type: 'cookie',   label: 'Cookies',   color: '#B8860B' },
+      { type: 'download', label: 'Downloads', color: 'var(--accent-safe)' },
+    ];
+    const LANE_H  = 36;
+    const LABEL_W = 80;
+    const RULER_H = 24;
+    const DOT_R   = 5;
+
+    // FIX-2: Read offsetWidth AFTER the element is visible and has layout.
+    // Previously this ran while tlLaneView might still be display:none from
+    // the initial page load, giving offsetWidth=0 → totalW always 700px.
+    // Now we ensure a minimum of 700 but never clamp to it when real width
+    // is available. If the container truly is zero (hidden tab etc.), 700 is
+    // still a reasonable fallback.
+    const containerW = el.getBoundingClientRect().width || el.offsetWidth;
+    const totalW     = Math.max(Math.min(containerW - 20, 1200), 700);
+    const totalH     = RULER_H + LANES.length * LANE_H + 8;
+
+    const TICKS = 8;
+    let rulerHtml = '';
+    for (let i = 0; i <= TICKS; i++) {
+      const pct   = i / TICKS;
+      const x     = LABEL_W + pct * (totalW - LABEL_W);
+      const t     = new Date(tMin + pct * tSpan);
+      const label = tSpan < 86400000
+        ? t.toISOString().slice(11, 16)
+        : t.toISOString().slice(5,  10);
+      rulerHtml += `<div style="position:absolute;left:${x}px;top:0;
+        transform:translateX(-50%);font-size:9px;color:var(--text-secondary);
+        font-family:var(--font-mono);white-space:nowrap;">${label}</div>`;
+    }
+
+    let bandHtml = '';
+    data.sessions.forEach((s, si) => {
+      if (!s.events?.length) return;
+      const evts = s.events.filter(e => e.time);
+      if (!evts.length) return;
+      const sx = LABEL_W + ((new Date(evts[0].time).getTime()               - tMin) / tSpan) * (totalW - LABEL_W);
+      const ex = LABEL_W + ((new Date(evts[evts.length-1].time).getTime()   - tMin) / tSpan) * (totalW - LABEL_W);
+      const bw = Math.max(ex - sx, 2);
+      const isOffhours = evts.some(e => { try { const h = new Date(e.time).getUTCHours(); return h >= 23 || h < 5; } catch { return false; }});
+      bandHtml += `<div style="position:absolute;left:${sx}px;top:${RULER_H}px;
+        width:${bw}px;height:${LANES.length * LANE_H}px;
+        background:${isOffhours ? 'rgba(250,232,197,0.07)' : (si%2===0 ? 'rgba(139,69,245,0.04)' : 'transparent')};
+        border-left:1px dashed ${isOffhours ? 'rgba(250,232,197,0.3)' : 'rgba(139,69,245,0.15)'};
+        pointer-events:none;"></div>`;
+    });
+
+    let lanesHtml = '';
+    LANES.forEach((lane, li) => {
+      const y      = RULER_H + li * LANE_H;
+      const events = allEvents.filter(e => e.type === lane.type);
+      let dotsHtml = '';
+      events.forEach(e => {
+        const x   = LABEL_W + ((new Date(e.time).getTime() - tMin) / tSpan) * (totalW - LABEL_W);
+        const risk = e.risk_score || 0;
+        const col  = risk >= 61 ? '#EF4444' : risk >= 31 ? '#F59E0B' : lane.color;
+        const r    = risk >= 61 ? 7 : DOT_R;
+        let tip = '';
+        if (e.type === 'history')  tip = `${e.domain} — ${fmtTime(e.time).slice(0,16)}`;
+        if (e.type === 'cookie')   tip = `${e.name}@${e.host} — ${fmtTime(e.time).slice(0,16)}`;
+        if (e.type === 'download') tip = `${e.filename} — ${fmtTime(e.time).slice(0,16)}`;
+        dotsHtml += `<div title="${esc(tip)}" style="
+          position:absolute;left:${x - r}px;top:${LANE_H/2 - r}px;
+          width:${r*2}px;height:${r*2}px;border-radius:50%;
+          background:${col};opacity:${risk >= 61 ? '1' : '0.75'};cursor:default;transition:transform 0.1s;"
+          onmouseenter="this.style.transform='scale(1.5)'"
+          onmouseleave="this.style.transform=''"
+        ></div>`;
+      });
+      lanesHtml += `
+        <div style="position:absolute;left:0;top:${y}px;
+          width:${LABEL_W - 8}px;height:${LANE_H}px;
+          display:flex;align-items:center;justify-content:flex-end;
+          font-size:10px;color:var(--text-secondary);font-family:var(--font-mono);
+          padding-right:8px;font-weight:bold;">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
+            background:${lane.color};margin-right:5px;flex-shrink:0;"></span>
+          ${lane.label}
+        </div>
+        <div style="position:absolute;left:${LABEL_W}px;top:${y}px;
+          width:${totalW - LABEL_W}px;height:${LANE_H}px;
+          border-top:1px solid var(--border);overflow:visible;">
+          <div style="position:relative;width:100%;height:100%;">${dotsHtml}</div>
+        </div>`;
+    });
+
+    el.innerHTML = `
+      <div style="position:relative;width:${totalW}px;height:${totalH}px;
+                  background:var(--bg-surface);border:1px solid var(--border-mid);
+                  border-radius:var(--radius-lg);overflow:visible;">
+        <div style="position:absolute;left:${LABEL_W}px;top:0;
+          width:${totalW - LABEL_W}px;height:${RULER_H}px;
+          border-bottom:1px solid var(--border-mid);overflow:hidden;">
+          <div style="position:relative;width:100%;height:100%;">${rulerHtml}</div>
+        </div>
+        ${bandHtml}
+        ${lanesHtml}
+      </div>
+      <div style="font-size:10px;color:var(--text-secondary);margin-top:6px;font-family:var(--font-mono);">
+        ${allEvents.length.toLocaleString()} events · hover dots for details · shaded bands = sessions
+      </div>`;
+  }
+
+  // ── Range buttons ──────────────────────────────────────────────────────────
   function setTlRange(range, btn) {
     tlRange = range;
     document.querySelectorAll('[id^="tlBtn"]').forEach(b => {
       b.className = b === btn ? 'bfx-btn sm' : 'bfx-btn outline sm';
     });
-    loadTimeline();
+    fetchAndRenderTimeline();
   }
 
   ['tlTypeHistory','tlTypeCookies','tlTypeDownloads'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', () => loadTimeline());
+    document.getElementById(id)?.addEventListener('change', () => fetchAndRenderTimeline());
   });
 
-  // Override loadTimeline to respect type checkboxes
-  const _origLoad = loadTimeline;
-  window.loadTimeline = async function() {
+  // ── Main fetch + render ────────────────────────────────────────────────────
+  // FIX-1: Replaced the broken pattern of capturing loadTimeline into _origLoad
+  // then discarding it. The override never called _origLoad (so the capture was
+  // dead code), AND it reconstructed the same URL params logic from scratch in
+  // parallel — two divergent code paths that could desync.
+  //
+  // Now there is ONE function: fetchAndRenderTimeline(). It:
+  //   • reads the type checkboxes
+  //   • computes the from-date from tlRange (declared in app.js)
+  //   • sends both to the API
+  //   • stores the result in _tlLastData
+  //   • renders the active view (lane or session list)
+  //
+  // tlRange is the variable declared in app.js's loadTimeline closure. We read
+  // it directly here since both scripts share the same global scope on the page.
+
+  async function fetchAndRenderTimeline() {
     const types = [];
-    if (document.getElementById('tlTypeHistory')?.checked) types.push('history');
-    if (document.getElementById('tlTypeCookies')?.checked) types.push('cookies');
+    if (document.getElementById('tlTypeHistory')?.checked)   types.push('history');
+    if (document.getElementById('tlTypeCookies')?.checked)   types.push('cookies');
     if (document.getElementById('tlTypeDownloads')?.checked) types.push('downloads');
 
-    const ranges = { '24h': 1, '7d': 7, '30d': 30, 'all': 0 };
-    const days = ranges[tlRange] || 30;
-    let fromParam = '';
+    const ranges   = { '24h': 1, '7d': 7, '30d': 30, 'all': 0 };
+    const days     = ranges[tlRange] || 30;
+    let fromParam  = '';
     if (days > 0) {
       const d = new Date();
       d.setDate(d.getDate() - days);
       fromParam = d.toISOString();
     }
+
     const params = new URLSearchParams({ from: fromParam, types: types.join(',') });
-    const data = await API.get(`/api/timeline?${params}`);
-    const el = document.getElementById('timelineList');
+    const data   = await API.get(`/api/timeline?${params}`);
+    _tlLastData  = data;
+
     const countEl = document.getElementById('tlEventCount');
+    if (countEl && data) {
+      countEl.textContent = `${(data.total || 0).toLocaleString()} events · ${(data.sessions || []).length} sessions`;
+    }
+
+    if (_tlView === 'lane') {
+      renderLaneView(data);
+    } else {
+      renderSessionList(data);
+    }
+  }
+
+  // ── Session list renderer (moved out of inline HTML string) ───────────────
+  function renderSessionList(data) {
+    const el = document.getElementById('timelineList');
     if (!el) return;
 
     if (!data?.sessions?.length) {
       el.innerHTML = '<div class="bfx-loading muted">No events in this time range.</div>';
-      if (countEl) countEl.textContent = '';
       return;
     }
-
-    if (countEl) countEl.textContent = `${data.total.toLocaleString()} events · ${data.sessions.length} sessions`;
 
     const dotClass = { history: 'dot-history', cookie: 'dot-cookie', download: 'dot-download', bookmark: 'dot-bookmark' };
 
@@ -104,8 +281,8 @@
 
       const itemsHtml = (s.events || []).slice(0, 100).map(e => {
         let text = '';
-        if (e.type === 'history') text = `<span class="mono" style="font-size:10px;">${esc(e.domain)}</span>${e.title ? ' — ' + esc(e.title.slice(0, 80)) : ''}`;
-        else if (e.type === 'cookie') text = `Cookie: <span class="mono">${esc(e.name)}</span> → ${esc(e.host || '')}`;
+        if (e.type === 'history')  text = `<span class="mono" style="font-size:10px;">${esc(e.domain)}</span>${e.title ? ' — ' + esc(e.title.slice(0, 80)) : ''}`;
+        else if (e.type === 'cookie')   text = `Cookie: <span class="mono">${esc(e.name)}</span> → ${esc(e.host || '')}`;
         else if (e.type === 'download') text = `<strong>Download:</strong> <span class="mono">${esc(e.filename)}</span>`;
         else text = esc(e.type);
         const riskSpan = e.risk_score >= 61
@@ -119,7 +296,7 @@
       }).join('');
 
       const truncNote = (s.events || []).length > 100
-        ? `<div style="padding:6px 14px;font-size:10px;color:var(--text-secondary);">… ${(s.events.length - 100)} more events not shown</div>`
+        ? `<div style="padding:6px 14px;font-size:10px;color:var(--text-secondary);">… ${s.events.length - 100} more events not shown</div>`
         : '';
 
       return `<div class="bfx-session-block">
@@ -133,8 +310,16 @@
         <div class="bfx-session-items${si === 0 ? ' open' : ''}">${itemsHtml}${truncNote}</div>
       </div>`;
     }).join('');
-  };
+  }
 
-  loadTimeline();
+  // ── Override app.js loadTimeline so range buttons in base still work ───────
+  // app.js defines loadTimeline() and tlRange. We replace loadTimeline with
+  // our version that sends type checkboxes and stores data for lane rendering.
+  // tlRange is still mutated by setTlRange (above), which app.js's range
+  // buttons also write to — so both setTlRange paths funnel into one fetch.
+  window.loadTimeline = fetchAndRenderTimeline;
+
+  // Initial load
+  fetchAndRenderTimeline();
 </script>
 {% endblock %}

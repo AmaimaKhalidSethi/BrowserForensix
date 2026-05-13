@@ -1,1 +1,20 @@
-flask>=3.0.0
+# BrowserForensix — Python dependencies
+# Install: pip install -r requirements.txt
+
+# ── Core (required) ───────────────────────────────────────────────────────────
+flask>=3.0.0                # web server + API + template rendering
+
+# ── Cookie decryption (strongly recommended) ──────────────────────────────────
+# Required by decryptor.py for AES-256-GCM cookie decryption (Chrome v10/v11).
+# Without this, Chrome cookies show as [ENCRYPTED]. Install one of:
+cryptography>=41.0.0        # preferred — maintained by PyCA
+
+# ── LevelDB Snappy decompression (optional) ──────────────────────────────────
+# Required by leveldb_reader.py to read Snappy-compressed .ldb SST blocks.
+# .log files (most recent data) are always read without this.
+# python-snappy>=0.7.2      # uncomment to enable
+
+# ── AI features (optional) ────────────────────────────────────────────────────
+# ai_engine.py uses only stdlib urllib — no extra packages needed.
+# Set OPENROUTER_API_KEY in .env to enable AI features.
+python-dotenv>=1.0.0        # loads .env automatically on serve.py startup

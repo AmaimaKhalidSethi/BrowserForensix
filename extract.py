@@ -34,13 +34,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-try:
-    from leveldb_reader import read_all_storage as _read_leveldb
-    _LEVELDB_AVAILABLE = True
-except ImportError:
-    _LEVELDB_AVAILABLE = False
-    
-
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
@@ -365,7 +358,15 @@ def extract_chrome_history(profile: Path, profile_label: str) -> List[Dict]:
     return out
 
 
-def extract_chrome_cookies(profile: Path, profile_label: str) -> List[Dict]:
+def extract_chrome_cookies(profile: Path, profile_label: str,
+                           decryptor=None) -> List[Dict]:
+    """
+    Extract Chrome cookies.
+    - v10/v11 (Chrome 80-126): decrypted via DPAPI + AES-256-GCM if decryptor available.
+    - v20 (Chrome 127+, App-Bound Encryption): shown as [ENCRYPTED:v20].
+      These require SYSTEM-level access and cannot be decrypted externally.
+    - No prefix: plaintext (Firefox, old Chrome).
+    """
     for name in ["Network/Cookies", "Cookies"]:
         src = profile / name
         if src.exists():
@@ -383,23 +384,63 @@ def extract_chrome_cookies(profile: Path, profile_label: str) -> List[Dict]:
     """, f"{profile_label} Cookies")
     cleanup_tmp(db)
 
+    decrypted_count = 0
+    v20_count       = 0
     out = []
+
     for r in rows:
-        is_encrypted = len(r.get("encrypted_value") or b"") > 0
+        raw_enc = r.get("encrypted_value") or b""
+        raw_val = r.get("value") or ""
+
+        prefix    = raw_enc[:3] if len(raw_enc) >= 3 else b""
+        is_v20    = prefix == b"v20"
+        is_v10v11 = prefix in (b"v10", b"v11")
+
+        if is_v20:
+            # Chrome 127+ App-Bound Encryption — cannot decrypt externally
+            v20_count    += 1
+            display_value = "[ENCRYPTED:v20]"
+            is_encrypted  = True
+
+        elif is_v10v11 and decryptor and decryptor.available:
+            # DPAPI-wrapped AES-256-GCM — decryptable with resolved key
+            result = decryptor.decrypt_to_display(raw_enc)
+            if result and result not in ("[ENCRYPTED]", "[DECRYPT_FAILED]"):
+                display_value = result
+                is_encrypted  = False
+                decrypted_count += 1
+            else:
+                display_value = result
+                is_encrypted  = True
+
+        elif raw_enc:
+            # Encrypted, no decryptor or key not available
+            display_value = "[ENCRYPTED]"
+            is_encrypted  = True
+
+        else:
+            # Plaintext (Firefox, very old Chrome)
+            display_value = raw_val
+            is_encrypted  = False
+
         out.append({
-            "host": r["host_key"],
-            "name": r["name"],
-            "value": "[ENCRYPTED]" if is_encrypted else (r.get("value") or ""),
+            "host":      r["host_key"],
+            "name":      r["name"],
+            "value":     display_value,
             "encrypted": is_encrypted,
-            "path": r["path"],
-            "expires": chrome_epoch_to_iso(r["expires_utc"]) if r["expires_utc"] else "",
-            "created": chrome_epoch_to_iso(r["creation_utc"]),
-            "secure": bool(r["is_secure"]),
+            "path":      r["path"],
+            "expires":   chrome_epoch_to_iso(r["expires_utc"]) if r["expires_utc"] else "",
+            "created":   chrome_epoch_to_iso(r["creation_utc"]),
+            "secure":    bool(r["is_secure"]),
             "http_only": bool(r["is_httponly"]),
-            "samesite": r["samesite"],
-            "profile": profile_label,
+            "samesite":  r["samesite"],
+            "profile":   profile_label,
         })
-    log.info(f"{profile_label} Cookies: {len(out)} entries.")
+
+    summary = f"{len(out)} cookies"
+    if decrypted_count: summary += f", {decrypted_count} decrypted (v10/v11)"
+    if v20_count:       summary += f", {v20_count} App-Bound v20 (not decryptable)"
+    log.info(f"{profile_label} Cookies: {summary}")
     return out
 
 
@@ -555,7 +596,7 @@ def _profile_label(profile: Path, account_names: Optional[Dict[str, str]] = None
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run(browser: str, profile_path: Optional[str] = None) -> None:
+def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[str] = None) -> None:
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     os_name = platform.system()
 
@@ -572,8 +613,19 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
         "cookies": [],
         "bookmarks": [],
         "downloads": [],
-        "local_storage": [],
     }
+
+    # ── Cookie decryptor (v10/v11 — Chrome <127, macOS, Linux, CTF profiles) ──
+    # Import here so missing 'cryptography' package doesn't break extraction.
+    # Gracefully falls back to [ENCRYPTED] if key cannot be resolved.
+    _decryptor = None
+    try:
+        from decryptor import CookieDecryptor as _CD
+        _decryptor = _CD  # store class, instantiate per browser-root below
+    except ImportError:
+        log.info("decryptor.py not found — cookie values shown as [ENCRYPTED]")
+    except Exception as _e:
+        log.warning(f"decryptor import failed: {_e}")
 
     # ── Chrome / Edge ──────────────────────────────────────────────────────────
     if browser in ("chrome", "edge"):
@@ -589,6 +641,26 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
 
         log.info(f"Extracting {len(profiles)} profile(s): {[p.name for p in profiles]}")
 
+        # One decryptor per browser install — Local State is in the User Data root
+        _cookie_decryptor = None
+        if _decryptor and profiles:
+            user_data_root = profiles[0].parent
+            cookie_key_hex = cookie_key
+            try:
+                _cookie_decryptor = _decryptor(
+                    user_data_path=user_data_root,
+                    cookie_key_hex=cookie_key_hex,
+                )
+                if _cookie_decryptor.available:
+                    log.info("Cookie decryption: key resolved — v10/v11 cookies will be decrypted")
+                else:
+                    log.info("Cookie decryption: key not resolved — v10/v11 shown as [ENCRYPTED]")
+                    log.info("  (Chrome 127+ uses App-Bound Encryption; v20 cookies cannot be")
+                    log.info("   decrypted by external tools — this is by design)")
+            except Exception as _e:
+                log.warning(f"Cookie decryptor init failed: {_e}")
+                _cookie_decryptor = None
+
         for profile in profiles:
             label = _profile_label(profile, account_names)
             evidence["meta"]["profiles_extracted"].append({
@@ -598,19 +670,9 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
             })
 
             evidence["history"]   += extract_chrome_history(profile, label)
-            evidence["cookies"]   += extract_chrome_cookies(profile, label)
+            evidence["cookies"]   += extract_chrome_cookies(profile, label, _cookie_decryptor)
             evidence["bookmarks"] += extract_chrome_bookmarks(profile, label)
             evidence["downloads"] += extract_chrome_downloads(profile, label)
-
-            # localStorage / sessionStorage / extension state via LevelDB
-            if _LEVELDB_AVAILABLE:
-                try:
-                    ls = _read_leveldb(profile)
-                    for entry in ls:
-                        entry["profile"] = label
-                    evidence["local_storage"] += ls
-                except Exception as _e:
-                    log.warning(f"{label} LevelDB: {_e}")
             # NOTE: History DB is copied once inside each extractor. Both history
             # and downloads extractors copy it independently for snapshot consistency.
             # If disk I/O is a concern use --profile to extract a single profile.
@@ -657,7 +719,7 @@ def run(browser: str, profile_path: Optional[str] = None) -> None:
         log.warning("Safari extraction: basic stub. Full plist/binary cookie parsing not yet implemented.")
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads", "local_storage"))
+    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads"))
     evidence["meta"]["total_artifacts"] = total
     evidence["meta"]["profile_path"] = (
         ", ".join(p["path"] for p in evidence["meta"]["profiles_extracted"])
@@ -698,4 +760,4 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
-    run(args.browser, args.profile)
+    run(args.browser, args.profile, getattr(args, 'cookie_key', None))

@@ -1,12 +1,37 @@
 /* BrowserForensix — ctf.js
-   CTF analysis frontend. Loaded only on /ctf and as a lightweight
-   injector on other pages. Never modifies app.js or any existing global.
-
-   All functions are namespaced under ctf* to avoid collisions.
+   CTF analysis frontend. Loaded only on /ctf.
    Relies on: esc(), fmtTime(), riskClass(), riskColor() from app.js.
+
+   FIX-8: _ctfCopyBtn previously used setTimeout(..., 0) to attach a click
+   listener to a button by generated ID after innerHTML assignment. This is
+   unreliable: if the rendering loop produces many buttons the setTimeout
+   callbacks fire before their target elements are in the DOM (innerHTML
+   assignment is synchronous, but the event loop can reorder microtasks
+   queued inside a loop).
+
+   Fix: _ctfCopyBtn now returns only the HTML string with a data-ctf-copy
+   attribute containing the encoded value. A single delegated 'click' listener
+   on document handles all copy buttons regardless of when they are inserted.
+   No IDs, no timers, no race.
 */
 
 'use strict';
+
+// ── Delegated copy handler (replaces per-button setTimeout) ──────────────────
+// FIX-8: One listener covers every copy button on the page, present or future.
+// data-ctf-copy holds the base64-encoded value to avoid quoting issues in HTML.
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-ctf-copy]');
+  if (!btn) return;
+  const raw = btn.dataset.ctfCopy;
+  if (!raw) return;
+  let text;
+  try { text = atob(raw); } catch { text = raw; }
+  _ctfCopy(text);
+  const orig = btn.textContent;
+  btn.textContent = '✓ Copied';
+  setTimeout(() => { btn.textContent = orig; }, 1500);
+});
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
@@ -33,8 +58,8 @@ function _ctfLoading(elId, msg) {
 function _ctfSetBtnLoading(btnId, loading) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
-  btn.disabled = loading;
-  btn.textContent = loading ? '…' : btn.dataset.label || btn.textContent;
+  btn.disabled    = loading;
+  btn.textContent = loading ? '…' : (btn.dataset.label || btn.textContent);
 }
 
 function _ctfEmpty(elId, msg) {
@@ -55,17 +80,12 @@ function _ctfCopy(text) {
   }
 }
 
+// FIX-8: Returns an HTML button with data-ctf-copy set to btoa(text).
+// The delegated listener at the top of this file handles the click — no IDs,
+// no setTimeout, no race between innerHTML assignment and listener attachment.
 function _ctfCopyBtn(text) {
-  const id = 'ctfCopy_' + Math.random().toString(36).slice(2, 8);
-  setTimeout(() => {
-    const btn = document.getElementById(id);
-    if (btn) btn.addEventListener('click', () => {
-      _ctfCopy(text);
-      btn.textContent = '✓ Copied';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-    });
-  }, 0);
-  return `<button id="${id}" class="bfx-btn outline sm" style="font-size:9px;padding:1px 7px;">Copy</button>`;
+  const encoded = btoa(unescape(encodeURIComponent(text)));
+  return `<button data-ctf-copy="${encoded}" class="bfx-btn outline sm" style="font-size:9px;padding:1px 7px;">Copy</button>`;
 }
 
 function _ctfArtifactBadge(type) {
@@ -271,8 +291,8 @@ function _ctfRenderParamResults(data) {
   </div>`;
 
   data.results.forEach(r => {
-    const hasFlagHits = r.params.some(p => p.flag_hits?.length);
-    const borderColor = hasFlagHits ? 'var(--accent-action)' : 'var(--border-mid)';
+    const hasFlagHits  = r.params.some(p => p.flag_hits?.length);
+    const borderColor  = hasFlagHits ? 'var(--accent-action)' : 'var(--border-mid)';
 
     const paramRows = r.params.map(p => {
       const flagBadges = (p.flag_hits || []).map(f => _ctfMatchBadge(f.match)).join('');
@@ -375,7 +395,6 @@ function _ctfRenderCookieResults(data) {
           color:${riskColor(r.risk_score)};font-weight:bold;">${r.risk_score}</span>
       </div>
 
-      <!-- Raw value -->
       <div style="margin-bottom:8px;">
         <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;
           color:var(--text-secondary);margin-bottom:3px;">Raw Value</div>
@@ -386,7 +405,6 @@ function _ctfRenderCookieResults(data) {
         ${flagBadges ? `<div style="margin-top:5px;">${flagBadges}</div>` : ''}
       </div>
 
-      <!-- Hex dump -->
       <div style="margin-bottom:8px;">
         <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;
           color:var(--text-secondary);margin-bottom:3px;">Hex Dump (first 64 bytes)</div>
@@ -395,7 +413,6 @@ function _ctfRenderCookieResults(data) {
           color:var(--text-secondary);">${esc(r.hex_dump)}</div>
       </div>
 
-      <!-- Decodings -->
       ${Object.keys(r.decodings || {}).length ? `
         <div>
           <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;
@@ -406,7 +423,6 @@ function _ctfRenderCookieResults(data) {
       <div style="font-size:10px;color:var(--text-secondary);margin-top:7px;">
         Created: ${fmtTime(r.created)} · Expires: ${fmtTime(r.expires) || 'Session'}
       </div>
-
       <div style="margin-top:6px;">${_ctfCopyBtn(r.value)}</div>
     </div>`;
   });

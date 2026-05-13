@@ -2,8 +2,7 @@
 BrowserForensix — ctf_routes.py
 CTF-oriented analysis features as a self-contained Flask Blueprint.
 
-Register in serve.py (identical pattern to ai_routes.py):
-
+Register in serve.py:
     try:
         from ctf_routes import register_ctf_routes
         _CTF_AVAILABLE = True
@@ -14,23 +13,24 @@ Register in serve.py (identical pattern to ai_routes.py):
     if _CTF_AVAILABLE:
         register_ctf_routes(app, load_analysis)
 
-Zero modifications required to any other existing file except the two lines
-above and one nav item in base.html.
+FIX-B: Removed the @app.route("/ctf") / ctf_page() route from this file.
+        serve.py already registers @app.route("/ctf") as ctf_page().
+        Flask raises AssertionError when two functions share the same endpoint
+        name ("ctf_page"), so having it in both files crashes startup.
+        Page routes belong in serve.py; this file owns only /api/ctf/* routes.
 """
 
 import re
 import base64
 import binascii
 from urllib.parse import urlparse, parse_qs, unquote
-from flask import Blueprint, jsonify, request, render_template
+from flask import Blueprint, jsonify, request
 
 ctf_bp = Blueprint("ctf", __name__, url_prefix="/api/ctf")
 
 # ── Built-in CTF flag patterns ────────────────────────────────────────────────
-# Each is a compiled regex. The first capture group is the full flag token.
 
 _BUILTIN_PATTERNS = [
-    # Standard and competition-specific wrappers
     re.compile(r'(FLAG\{[^}]{1,200}\})',       re.IGNORECASE),
     re.compile(r'(CTF\{[^}]{1,200}\})',        re.IGNORECASE),
     re.compile(r'(picoCTF\{[^}]{1,200}\})',    re.IGNORECASE),
@@ -39,17 +39,15 @@ _BUILTIN_PATTERNS = [
     re.compile(r'(HackTheBox\{[^}]{1,200}\})', re.IGNORECASE),
     re.compile(r'(DUCTF\{[^}]{1,200}\})',      re.IGNORECASE),
     re.compile(r'(ACSC\{[^}]{1,200}\})',       re.IGNORECASE),
+    re.compile(r'(BFX\{[^}]{1,200}\})',        re.IGNORECASE),
     re.compile(r'(flag\{[^}]{1,200}\})',       re.IGNORECASE),
-    # Hex strings that look like flags: 32–64 hex chars (MD5/SHA length fingerprint)
     re.compile(r'\b([0-9a-f]{32,64})\b',       re.IGNORECASE),
 ]
 
-
-# FIX-CTF-2: cache compiled custom patterns to avoid O(n) recompiles in tight loops
 _custom_pattern_cache: dict = {}
 
+
 def _get_custom_pattern(custom_re: str):
-    """Return a compiled regex for custom_re, cached by pattern string."""
     if custom_re not in _custom_pattern_cache:
         try:
             _custom_pattern_cache[custom_re] = re.compile(custom_re, re.IGNORECASE)
@@ -58,8 +56,7 @@ def _get_custom_pattern(custom_re: str):
     return _custom_pattern_cache[custom_re]
 
 
-def _scan_string(value: str, custom_re=None) -> list[dict]:
-    """Return all flag matches found in `value`."""
+def _scan_string(value: str, custom_re=None) -> list:
     if not value or not isinstance(value, str):
         return []
     matches = []
@@ -83,11 +80,7 @@ def _scan_string(value: str, custom_re=None) -> list[dict]:
     return matches
 
 
-def _artifact_fields(data: dict) -> list[dict]:
-    """
-    Enumerate every string field across all artifact types.
-    Returns list of {artifact_type, field, value, artifact} dicts.
-    """
+def _artifact_fields(data: dict) -> list:
     fields = []
 
     for h in data.get("history", []):
@@ -96,7 +89,6 @@ def _artifact_fields(data: dict) -> list[dict]:
             if v:
                 fields.append({"artifact_type": "history", "field": f,
                                 "value": v, "artifact": h})
-        # Also decompose URL query params
         try:
             qs = parse_qs(urlparse(h.get("url", "")).query)
             for k, vals in qs.items():
@@ -108,11 +100,11 @@ def _artifact_fields(data: dict) -> list[dict]:
             pass
 
     for c in data.get("cookies", []):
-        for f in ("host", "name", "value"):  # FIX-CTF-4: "path" excluded — always "/" or "/api", pure noise
+        for f in ("host", "name", "value"):
             v = c.get(f, "")
             if v and v != "[ENCRYPTED]":
                 fields.append({"artifact_type": "cookie", "field": f,
-                                "value": v, "artifact": c})
+                                "value": str(v), "artifact": c})
 
     for d in data.get("downloads", []):
         for f in ("filename", "source_url", "target_path"):
@@ -132,35 +124,28 @@ def _artifact_fields(data: dict) -> list[dict]:
 
 
 def _decode_attempts(value: str) -> dict:
-    """
-    Try common CTF encodings on a string value.
-    Returns a dict of {encoding: decoded_string | None}.
-    """
     out = {}
 
-    # URL decode
     try:
         decoded = unquote(value)
         out["url"] = decoded if decoded != value else None
     except Exception:
         out["url"] = None
 
-    # Base64 — skip values that are too short to be meaningful
     out["base64"] = None
     if len(value) >= 4:
         for padded in (value, value + "=", value + "==", value + "==="):
             try:
                 raw = base64.b64decode(padded, validate=True)
-                if not raw:          # FIX-CTF-1: empty decode (e.g. input="")
+                if not raw:
                     continue
                 text = raw.decode("utf-8", errors="replace")
-                if len(text) >= 2:   # FIX-CTF-1: skip single-byte non-meaningful decodes
+                if len(text) >= 2:
                     out["base64"] = text
                     break
             except Exception:
                 continue
 
-    # Hex string (even-length hex → bytes → printable text)
     hex_clean = re.sub(r'\s', '', value)
     if re.fullmatch(r'[0-9a-fA-F]+', hex_clean) and len(hex_clean) % 2 == 0:
         try:
@@ -171,7 +156,6 @@ def _decode_attempts(value: str) -> dict:
     else:
         out["hex"] = None
 
-    # ROT13 (common in beginner CTFs)
     try:
         out["rot13"] = value.translate(
             str.maketrans(
@@ -182,12 +166,10 @@ def _decode_attempts(value: str) -> dict:
     except Exception:
         out["rot13"] = None
 
-    # Strip None values to keep response lean
     return {k: v for k, v in out.items() if v is not None and v != value}
 
 
 def _summarise_artifact(a: dict, atype: str) -> dict:
-    """Return a compact display-safe summary of an artifact for the results table."""
     if atype == "history":
         return {
             "label":      a.get("url", ""),
@@ -211,9 +193,9 @@ def _summarise_artifact(a: dict, atype: str) -> dict:
         }
     if atype == "bookmark":
         return {
-            "label": a.get("title", ""),
-            "title": a.get("url", ""),
-            "time":  a.get("date_added", ""),
+            "label":      a.get("title", ""),
+            "title":      a.get("url", ""),
+            "time":       a.get("date_added", ""),
             "risk_score": 0,
         }
     return {"label": str(a), "title": "", "time": "", "risk_score": 0}
@@ -222,20 +204,12 @@ def _summarise_artifact(a: dict, atype: str) -> dict:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 def register_ctf_routes(app, load_analysis_fn):
+    # FIX-B: No @app.route("/ctf") here. serve.py owns all page routes.
+    # Previously this registered ctf_page() which collided with serve.py's
+    # own ctf_page() registration, causing Flask to raise AssertionError on startup.
 
-    # ── Page route ────────────────────────────────────────────────────────────
-    @app.route("/ctf")
-    def ctf_page():
-        return render_template("ctf.html", active="ctf")
-
-    # ── Flag Scanner ──────────────────────────────────────────────────────────
     @ctf_bp.route("/scan/flags")
     def ctf_scan_flags():
-        """
-        Scan all artifact string fields for CTF flag patterns.
-        Optional: ?custom=MYCTF{[^}]+}  for a custom regex (URL-encode curly braces).
-        Optional: ?artifact_type=history   to filter by type.
-        """
         data        = load_analysis_fn()
         custom_re   = request.args.get("custom", "").strip()
         filter_type = request.args.get("artifact_type", "").strip().lower()
@@ -251,26 +225,19 @@ def register_ctf_routes(app, load_analysis_fn):
                 results.append({
                     "artifact_type": entry["artifact_type"],
                     "field":         entry["field"],
-                    "value":         entry["value"][:500],   # cap display length
+                    "value":         entry["value"][:500],
                     "matches":       hits,
                     "artifact":      _summarise_artifact(entry["artifact"], entry["artifact_type"]),
                 })
 
         return jsonify({
-            "total":         len(results),
+            "total":          len(results),
             "custom_pattern": custom_re or None,
-            "results":       results,
+            "results":        results,
         })
 
-    # ── Encoding Detector ─────────────────────────────────────────────────────
     @ctf_bp.route("/decode")
     def ctf_decode():
-        """
-        Scan all artifacts for base64, hex, URL-encoded, and ROT13 content.
-        Only returns entries where at least one decoding produces a non-trivial result.
-        Optional: ?artifact_type=cookie
-        Optional: ?min_length=8  (minimum field value length to attempt decode)
-        """
         data        = load_analysis_fn()
         filter_type = request.args.get("artifact_type", "").strip().lower()
         min_len     = max(4, int(request.args.get("min_length", 8) or 8))
@@ -287,7 +254,6 @@ def register_ctf_routes(app, load_analysis_fn):
             decodings = _decode_attempts(val)
             if not decodings:
                 continue
-            # Further filter: skip decodings that are just whitespace or too short
             meaningful = {k: v for k, v in decodings.items()
                           if v and len(v.strip()) >= 4}
             if not meaningful:
@@ -300,19 +266,10 @@ def register_ctf_routes(app, load_analysis_fn):
                 "artifact":      _summarise_artifact(entry["artifact"], entry["artifact_type"]),
             })
 
-        return jsonify({
-            "total":   len(results),
-            "results": results,
-        })
+        return jsonify({"total": len(results), "results": results})
 
-    # ── URL Parameter Inspector ───────────────────────────────────────────────
     @ctf_bp.route("/url/params")
     def ctf_url_params():
-        """
-        Decompose all history URLs into their query parameters.
-        Returns every param that is non-trivial (length >= 4) with decoding attempts.
-        Optional: ?q=keyword  to filter by URL substring.
-        """
         data = load_analysis_fn()
         q    = request.args.get("q", "").lower().strip()
 
@@ -323,7 +280,6 @@ def register_ctf_routes(app, load_analysis_fn):
                 continue
             if q and q not in url.lower():
                 continue
-            parsed = urlparse("")   # FIX-CTF-5: safe default before try block
             try:
                 parsed = urlparse(url)
                 qs = parse_qs(parsed.query, keep_blank_values=False)
@@ -339,14 +295,13 @@ def register_ctf_routes(app, load_analysis_fn):
                         continue
                     decodings = _decode_attempts(v)
                     flag_hits = _scan_string(v)
-                    # Also scan decoded forms for flags
                     for decoded_val in decodings.values():
                         flag_hits += _scan_string(decoded_val)
                     params.append({
-                        "key":       k,
-                        "value":     v[:300],
-                        "decodings": decodings,
-                        "flag_hits": flag_hits,
+                        "key":        k,
+                        "value":      v[:300],
+                        "decodings":  decodings,
+                        "flag_hits":  flag_hits,
                         "suspicious": bool(flag_hits) or len(v) > 50,
                     })
 
@@ -360,28 +315,18 @@ def register_ctf_routes(app, load_analysis_fn):
                     "params":     params,
                 })
 
-        # Sort: URLs with flag hits first, then by risk score
         results.sort(key=lambda r: (
             -sum(len(p["flag_hits"]) for p in r["params"]),
             -r["risk_score"]
         ))
 
-        return jsonify({
-            "total":   len(results),
-            "results": results,
-        })
+        return jsonify({"total": len(results), "results": results})
 
-    # ── Cookie Value Inspector ─────────────────────────────────────────────────
     @ctf_bp.route("/cookie/inspect")
     def ctf_cookie_inspect():
-        """
-        Return all non-encrypted cookie values with full decode attempts.
-        Optional: ?host=example.com
-        Optional: ?name=token
-        """
-        data    = load_analysis_fn()
-        host_q  = request.args.get("host", "").lower().strip()
-        name_q  = request.args.get("name", "").lower().strip()
+        data   = load_analysis_fn()
+        host_q = request.args.get("host", "").lower().strip()
+        name_q = request.args.get("name", "").lower().strip()
 
         results = []
         for c in data.get("cookies", []):
@@ -390,21 +335,21 @@ def register_ctf_routes(app, load_analysis_fn):
                 continue
             if host_q and host_q not in c.get("host", "").lower():
                 continue
-            if name_q and name_q not in c.get("name", "").lower():
+            if name_q and name_q not in str(c.get("name", "")).lower():
                 continue
 
+            value = str(value)
             decodings = _decode_attempts(value)
             flag_hits = _scan_string(value)
             for decoded_val in decodings.values():
                 flag_hits += _scan_string(decoded_val)
 
-            # Hex dump (first 64 bytes)
             raw_bytes = value.encode("utf-8", errors="replace")[:64]
             hex_dump  = " ".join(f"{b:02x}" for b in raw_bytes)
 
             results.append({
                 "host":       c.get("host", ""),
-                "name":       c.get("name", ""),
+                "name":       str(c.get("name", "")),
                 "type":       c.get("type", "Unknown"),
                 "value":      value[:300],
                 "hex_dump":   hex_dump,
@@ -415,23 +360,12 @@ def register_ctf_routes(app, load_analysis_fn):
                 "expires":    c.get("expires", ""),
             })
 
-        # Sort: cookies with flag hits first
         results.sort(key=lambda r: (-len(r["flag_hits"]), -r["risk_score"]))
+        return jsonify({"total": len(results), "results": results})
 
-        return jsonify({
-            "total":   len(results),
-            "results": results,
-        })
-
-    # ── Quick summary for the CTF dashboard ───────────────────────────────────
     @ctf_bp.route("/summary")
     def ctf_summary():
-        """
-        Fast counts only — used to populate the CTF page stat cards without
-        running full scans on every page load.
-        """
-        data = load_analysis_fn()
-        # FIX-CTF-3: compute fields once and iterate once for both counts
+        data   = load_analysis_fn()
         fields = _artifact_fields(data)
 
         flag_count    = 0
@@ -454,13 +388,13 @@ def register_ctf_routes(app, load_analysis_fn):
                 pass
 
         return jsonify({
-            "flag_hits":    flag_count,
+            "flag_hits":      flag_count,
             "encoded_fields": encoded_count,
-            "url_params":   param_count,
+            "url_params":     param_count,
             "total_artifacts": sum(
                 len(data.get(k, [])) for k in ("history", "cookies", "downloads", "bookmarks")
             ),
         })
 
     app.register_blueprint(ctf_bp)
-    print("[CTF] Routes registered — /ctf, /api/ctf/*")
+    print("[CTF] Routes registered — /api/ctf/*")

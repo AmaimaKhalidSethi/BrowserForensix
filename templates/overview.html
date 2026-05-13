@@ -45,6 +45,33 @@
     <!-- Left: anomalies + hashes -->
     <div class="bfx-dash-main">
 
+      <!-- ── Charts row ── -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;">
+
+        <!-- Risk Distribution Chart -->
+        <div class="bfx-panel">
+          <div class="bfx-panel-head">
+            <span class="bfx-panel-title">Risk Distribution</span>
+            <span style="font-size:9px;color:var(--text-secondary);font-family:var(--font-mono);">all artifacts</span>
+          </div>
+          <div class="bfx-panel-body" style="padding-bottom:10px;">
+            <div id="riskChart"><div class="bfx-loading" style="font-size:11px;">Loading…</div></div>
+          </div>
+        </div>
+
+        <!-- Top Domains Bar Chart -->
+        <div class="bfx-panel">
+          <div class="bfx-panel-head">
+            <span class="bfx-panel-title">Top Domains</span>
+            <span style="font-size:9px;color:var(--text-secondary);font-family:var(--font-mono);">by visit count</span>
+          </div>
+          <div class="bfx-panel-body" style="padding-bottom:10px;">
+            <div id="domainsChart"><div class="bfx-loading" style="font-size:11px;">Loading…</div></div>
+          </div>
+        </div>
+
+      </div>
+
       <!-- Anomalies accordion -->
       <div class="bfx-panel">
         <div class="bfx-panel-head">
@@ -278,6 +305,8 @@ window.loadOverview = async function() {
   renderAnomalies(data.anomalies || []);
   renderDomainList(data.top_domains || []);
   renderHeatmap(data.heatmap || []);
+  renderRiskChart(data.summary || {});
+  renderDomainsChart(data.top_domains || []);
 
   // Evidence hashes — clean table
   const metaEl = document.getElementById('evidenceMeta');
@@ -295,6 +324,113 @@ window.loadOverview = async function() {
     }
   }
 };
+
+
+// ── Risk Distribution Chart (SVG bar chart) ────────────────────────────────
+
+function renderRiskChart(summary) {
+  const el = document.getElementById('riskChart');
+  if (!el) return;
+
+  const low      = (summary.total_artifacts || 0) - (summary.flagged_count || 0) - (summary.moderate_count || 0);
+  const moderate = summary.moderate_count || 0;
+  const flagged  = summary.flagged_count  || 0;
+  const total    = Math.max(low + moderate + flagged, 1);
+
+  const bars = [
+    { label: 'Low (0–30)',      val: Math.max(low, 0),  color: 'var(--accent-safe)',     pct: Math.max(low, 0) / total },
+    { label: 'Moderate (31–60)',val: moderate,           color: 'var(--accent-moderate)', pct: moderate / total },
+    { label: 'Flagged (61–100)',val: flagged,            color: '#EF4444',                pct: flagged  / total },
+  ];
+
+  const W = el.offsetWidth || 260;
+  const H = 110;
+  const BAR_H   = 22;
+  const LABEL_W = 100;
+  const GAP     = 8;
+
+  let html = `<svg width="${W}" height="${H}" style="display:block;overflow:visible;">`;
+
+  bars.forEach((b, i) => {
+    const y    = i * (BAR_H + GAP);
+    const barW = Math.max(b.pct * (W - LABEL_W - 50), b.val > 0 ? 3 : 0);
+
+    html += `
+      <text x="0" y="${y + BAR_H - 6}" font-size="10" fill="var(--text-secondary)"
+            font-family="Courier New,monospace">${esc(b.label)}</text>`;
+
+    // Track
+    html += `<rect x="${LABEL_W}" y="${y + 3}" width="${W - LABEL_W - 50}" height="${BAR_H - 8}"
+              rx="3" fill="var(--bg-panel)" stroke="var(--border)" stroke-width="1"/>`;
+
+    // Fill
+    if (barW > 0) {
+      html += `<rect x="${LABEL_W}" y="${y + 3}" width="${barW}" height="${BAR_H - 8}"
+                rx="3" fill="${b.color}" opacity="0.85"/>`;
+    }
+
+    // Count label
+    html += `<text x="${LABEL_W + (W - LABEL_W - 50) + 6}" y="${y + BAR_H - 6}"
+              font-size="10" font-weight="bold" fill="${b.color}"
+              font-family="Courier New,monospace">${b.val.toLocaleString()}</text>`;
+  });
+
+  // Total line
+  html += `<text x="0" y="${H - 2}" font-size="9" fill="var(--text-secondary)"
+            font-family="Courier New,monospace">Total: ${total.toLocaleString()} artifacts</text>`;
+
+  html += '</svg>';
+  el.innerHTML = html;
+}
+
+// ── Top Domains Bar Chart (horizontal SVG bars) ────────────────────────────
+
+function renderDomainsChart(domains) {
+  const el = document.getElementById('domainsChart');
+  if (!el || !domains.length) {
+    if (el) el.innerHTML = '<div class="muted" style="font-size:11px;">No domain data.</div>';
+    return;
+  }
+
+  const top    = domains.slice(0, 8);
+  const maxVal = Math.max(...top.map(d => d.visit_count || 0), 1);
+  const W      = el.offsetWidth || 260;
+  const BAR_H  = 18;
+  const GAP    = 5;
+  const LABEL_W = 110;
+  const H       = top.length * (BAR_H + GAP) + 10;
+
+  let html = `<svg width="${W}" height="${H}" style="display:block;overflow:visible;">`;
+
+  top.forEach((d, i) => {
+    const y      = i * (BAR_H + GAP);
+    const risk   = d.risk_score || 0;
+    const color  = risk >= 61 ? '#EF4444' : risk >= 31 ? 'var(--accent-moderate)' : 'var(--accent-glow)';
+    const barW   = Math.max((d.visit_count / maxVal) * (W - LABEL_W - 40), 3);
+    const label  = (d.domain || '').length > 16 ? (d.domain || '').slice(0, 15) + '…' : (d.domain || '');
+
+    // Domain label
+    html += `<text x="${LABEL_W - 4}" y="${y + BAR_H - 5}" font-size="10"
+              fill="var(--text-secondary)" font-family="Courier New,monospace"
+              text-anchor="end">${esc(label)}</text>`;
+
+    // Track
+    html += `<rect x="${LABEL_W}" y="${y + 2}" width="${W - LABEL_W - 40}" height="${BAR_H - 6}"
+              rx="2" fill="var(--bg-panel)" stroke="var(--border)" stroke-width="1"/>`;
+
+    // Fill
+    html += `<rect x="${LABEL_W}" y="${y + 2}" width="${barW}" height="${BAR_H - 6}"
+              rx="2" fill="${color}" opacity="0.80"/>`;
+
+    // Visit count
+    html += `<text x="${LABEL_W + (W - LABEL_W - 40) + 5}" y="${y + BAR_H - 5}"
+              font-size="10" fill="${color}" font-weight="bold"
+              font-family="Courier New,monospace">${(d.visit_count || 0).toLocaleString()}</text>`;
+  });
+
+  html += '</svg>';
+  el.innerHTML = html;
+}
 
 loadOverview();
 </script>
