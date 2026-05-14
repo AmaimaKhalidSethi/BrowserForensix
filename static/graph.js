@@ -353,13 +353,20 @@ function _gAttachSvgEvents() {
 let _gAnimFrame = null;
 let _gTick = 0;
 
+function _gKineticEnergy() {
+  return _gNodes.reduce((sum, n) => sum + n.vx * n.vx + n.vy * n.vy, 0);
+}
+
 function _gLoop() {
   _gTick++;
-  // Run physics for 300 ticks then slow down, stop after 2000 ticks to prevent infinite loop
   if (_gTick < 300 || _gDragging) _forceStep();
   _gRender();
-  if (_gTick < 2000) {
+
+  const settled = !_gDragging && _gTick > 60 && _gKineticEnergy() < 0.05;
+  if (_gTick < 2000 && !settled) {
     _gAnimFrame = requestAnimationFrame(_gLoop);
+  } else {
+    _gAnimFrame = null;  // mark loop as stopped
   }
 }
 
@@ -424,6 +431,16 @@ async function loadRelationshipGraph() {
     container.innerHTML = '<div class="muted" style="padding:14px;font-size:12px;">Error loading relationship graph. Check console for details.</div>';
   }
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && _gAnimFrame) {
+    cancelAnimationFrame(_gAnimFrame);
+    _gAnimFrame = null;
+  } else if (!document.hidden && _gNodes.length && !_gAnimFrame && _gTick < 2000) {
+    _gTick = 0;
+    _gLoop();
+  }
+});
 
 function resetGraphLayout() {
   if (!_gNodes.length) return;

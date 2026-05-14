@@ -136,28 +136,28 @@
       else proxNote = `Last visits more than 30 min apart — likely different sessions`;
     }
 
-    el.innerHTML = `<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;font-size:12px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-        <div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain A — ${esc(a)}</div>
-          <div>Visits: <strong>${dataA.total_visits || 0}</strong></div>
-          <div>Cookies: <strong>${(dataA.cookies || []).length}</strong></div>
-          <div>Risk: <span style="color:${riskColor(dataA.max_risk_score)};font-weight:bold;">${dataA.max_risk_score}</span></div>
-          <div>Last seen: <span class="mono" style="font-size:10px;">${fmtTime(dataA.last_seen) || '—'}</span></div>
-        </div>
-        <div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain B — ${esc(b)}</div>
-          <div>Visits: <strong>${dataB.total_visits || 0}</strong></div>
-          <div>Cookies: <strong>${(dataB.cookies || []).length}</strong></div>
-          <div>Risk: <span style="color:${riskColor(dataB.max_risk_score)};font-weight:bold;">${dataB.max_risk_score}</span></div>
-          <div>Last seen: <span class="mono" style="font-size:10px;">${fmtTime(dataB.last_seen) || '—'}</span></div>
-        </div>
+  el.innerHTML = `<div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;font-size:12px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain A — ${esc(a)}</div>
+        <div>Visits: <strong>${dataA.total_visits || 0}</strong></div>
+        <div>Cookies: <strong>${(dataA.cookies || []).length}</strong></div>
+        <div>Risk: <span style="color:${riskColor(dataA.max_risk_score)};font-weight:bold;">${dataA.max_risk_score}</span></div>
+        <div>Last seen: <span class="mono" style="font-size:10px;">${esc(fmtTime(dataA.last_seen)) || '—'}</span></div>
       </div>
-      <div style="border-top:1px solid var(--border);padding-top:10px;">
-        <div style="margin-bottom:4px;"><strong>Shared cookie scope:</strong> ${sharedHosts.length ? sharedHosts.map(esc).join(', ') : 'None detected'}</div>
-        <div><strong>Temporal proximity:</strong> ${esc(proxNote)}</div>
+      <div>
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);margin-bottom:4px;">Domain B — ${esc(b)}</div>
+        <div>Visits: <strong>${dataB.total_visits || 0}</strong></div>
+        <div>Cookies: <strong>${(dataB.cookies || []).length}</strong></div>
+        <div>Risk: <span style="color:${riskColor(dataB.max_risk_score)};font-weight:bold;">${dataB.max_risk_score}</span></div>
+        <div>Last seen: <span class="mono" style="font-size:10px;">${esc(fmtTime(dataB.last_seen)) || '—'}</span></div>
       </div>
-    </div>`;
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:10px;">
+      <div style="margin-bottom:4px;"><strong>Shared cookie scope:</strong> ${sharedHosts.length ? sharedHosts.map(esc).join(', ') : 'None detected'}</div>
+      <div><strong>Temporal proximity:</strong> ${esc(proxNote)}</div>
+    </div>
+  </div>`;
   }
 
   loadInvestigate();

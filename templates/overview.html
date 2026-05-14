@@ -406,7 +406,7 @@ function renderDomainsChart(domains) {
     const y      = i * (BAR_H + GAP);
     const risk   = d.risk_score || 0;
     const color  = risk >= 61 ? '#EF4444' : risk >= 31 ? 'var(--accent-moderate)' : 'var(--accent-glow)';
-    const barW   = Math.max((d.visit_count / maxVal) * (W - LABEL_W - 40), 3);
+    const barW = Math.max((d.visits / maxVal) * (W - LABEL_W - 40), 3);
     const label  = (d.domain || '').length > 16 ? (d.domain || '').slice(0, 15) + '…' : (d.domain || '');
 
     // Domain label

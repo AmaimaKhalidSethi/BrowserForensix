@@ -223,6 +223,7 @@
   }
 
   async function aiNarrativeReport() {
+    if (aiStreaming) return; 
     const case_n = prompt('Case number (optional):') || '';
     const examiner = prompt('Examiner name (optional):') || '';
     const date = new Date().toISOString().slice(0,10);

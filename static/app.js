@@ -597,6 +597,12 @@ async function loadHistory(reset = false) {
 function toggleHistExpand(row, h) {
   const existing = document.getElementById('histExpandRow');
   if (existing) existing.remove();
+
+  // If the stored row is no longer in the DOM, clear the reference
+  if (histExpandedRow && !document.contains(histExpandedRow)) {
+    histExpandedRow = null;
+  }
+
   if (histExpandedRow === row) { histExpandedRow = null; return; }
   histExpandedRow = row;
 
@@ -688,11 +694,16 @@ async function loadCookies(reset = false) {
 
 let bmData = null;
 
-async function loadBookmarks() {
-  if (!bmData) {
+async function loadBookmarks(forceRefresh = false) {
+  if (!bmData || forceRefresh) {
     bmData = await API.get('/api/bookmarks');
   }
   renderBookmarkFolder('all');
+}
+
+function refreshBookmarks() {
+  bmData = null;
+  loadBookmarks();
 }
 
 // Single authoritative renderBookmarkFolder — bookmarks.html no longer

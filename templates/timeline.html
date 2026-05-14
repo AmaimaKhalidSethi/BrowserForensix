@@ -111,8 +111,26 @@
     // Now we ensure a minimum of 700 but never clamp to it when real width
     // is available. If the container truly is zero (hidden tab etc.), 700 is
     // still a reasonable fallback.
-    const containerW = el.getBoundingClientRect().width || el.offsetWidth;
-    const totalW     = Math.max(Math.min(containerW - 20, 1200), 700);
+    // const containerW = el.getBoundingClientRect().width || el.offsetWidth;
+
+    
+    function _getLaneWidth(el) {
+      // Try the element itself first (visible case)
+      let w = el.getBoundingClientRect().width;
+      if (w > 0) return w;
+      // Walk up to find first ancestor with a real width
+      let parent = el.parentElement;
+      while (parent) {
+        w = parent.getBoundingClientRect().width;
+        if (w > 0) return w - 20;  // subtract padding
+        parent = parent.parentElement;
+      }
+      return 900;  // sensible fallback — better than 700
+    }
+
+    // Replace the containerW line:
+    const totalW = Math.max(Math.min(_getLaneWidth(el), 1200), 700);
+
     const totalH     = RULER_H + LANES.length * LANE_H + 8;
 
     const TICKS = 8;
