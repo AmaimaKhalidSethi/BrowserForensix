@@ -16,6 +16,8 @@ import re
 import time
 from pathlib import Path
 from typing import Generator, Optional
+import logging
+import threading
 
 import urllib.request
 import urllib.error
@@ -43,13 +45,67 @@ if _env_path.exists():
 
 
 def _api_key() -> str:
-    key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not key:
+    # Deprecated single-key accessor kept for compatibility.
+    # New code should use the rotation helpers below.
+    keys = _API_KEYS
+    if not keys:
         raise EnvironmentError(
-            "OPENROUTER_API_KEY not set. Add it to your .env file or environment:\n"
-            "  OPENROUTER_API_KEY=sk-or-..."
+            "No OPENROUTER API keys found. Set OPENROUTER_API_KEY or OPENROUTER_API_KEY_1, ..."
         )
-    return key
+    # Return the first key without advancing rotation.
+    return keys[0]
+
+
+# ── API key rotation state ──────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+_API_KEY_LOCK = threading.Lock()
+_API_KEYS: list[str] = []
+_API_KEY_INDEX = 0
+
+
+def _load_api_keys() -> None:
+    """Load OPENROUTER API keys from environment variables.
+
+    Supports: OPENROUTER_API_KEY (fallback) and OPENROUTER_API_KEY_1, _2, ...
+    Keys are ordered by numeric suffix (no suffix sorts first).
+    """
+    global _API_KEYS
+    pattern = re.compile(r"^OPENROUTER_API_KEY(?:_(\d+))?$")
+    found: dict[int, str] = {}
+    for name, val in os.environ.items():
+        m = pattern.match(name)
+        if m and val:
+            suf = m.group(1)
+            idx = int(suf) if suf is not None else 0
+            found[idx] = val.strip()
+    if not found:
+        _API_KEYS = []
+        return
+    items = sorted(found.items(), key=lambda kv: kv[0])
+    _API_KEYS = [v for _, v in items]
+    logger.info("Loaded %d OPENROUTER API key(s)", len(_API_KEYS))
+
+
+def _get_next_key() -> tuple[int, str]:
+    """Return the next API key (index, key) and advance the round-robin index.
+
+    Logs the key index but never logs key values.
+    """
+    global _API_KEY_INDEX
+    if not _API_KEYS:
+        raise EnvironmentError(
+            "No OPENROUTER API keys found. Set OPENROUTER_API_KEY or OPENROUTER_API_KEY_1, ..."
+        )
+    with _API_KEY_LOCK:
+        idx = _API_KEY_INDEX
+        key = _API_KEYS[idx]
+        _API_KEY_INDEX = (_API_KEY_INDEX + 1) % len(_API_KEYS)
+    logger.info("Active OPENROUTER API key index %d", idx)
+    return idx, key
+
+
+# Initialize keys at module import time
+_load_api_keys()
 
 
 # ── Low-level HTTP ────────────────────────────────────────────────────────────
@@ -64,42 +120,64 @@ def _post(payload: dict, stream: bool = False, model: str = PRIMARY_MODEL) -> "d
     keeping aiStreaming=True and locking the UI send button indefinitely.
     """
     payload = {**payload, "model": model}
-    body    = json.dumps(payload).encode()
+    body = json.dumps(payload).encode()
 
-    req = urllib.request.Request(
-        f"{OPENROUTER_BASE}/chat/completions",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type":  "application/json",
-            "HTTP-Referer":  APP_URL,
-            "X-Title":       APP_NAME,
-        },
-        method="POST",
-    )
+    # Try each configured API key in round-robin order. If a key returns a
+    # 429 (rate limit), fall back to the next key and retry until keys are
+    # exhausted.
+    if not _API_KEYS:
+        raise EnvironmentError(
+            "No OPENROUTER API keys found. Set OPENROUTER_API_KEY or OPENROUTER_API_KEY_1, ..."
+        )
 
-    try:
-        # FIX-9: timeout added here — was urlopen(req) with no timeout argument.
-        resp = urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT)
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode(errors="replace")
-        raise RuntimeError(f"OpenRouter {e.code}: {body_text}") from e
+    last_exc: Optional[Exception] = None
+    attempts = len(_API_KEYS)
+    for attempt in range(attempts):
+        idx, key = _get_next_key()
+        req = urllib.request.Request(
+            f"{OPENROUTER_BASE}/chat/completions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": APP_URL,
+                "X-Title": APP_NAME,
+            },
+            method="POST",
+        )
 
-    if stream:
-        def _lines():
-            for raw in resp:
-                line = raw.decode().strip()
-                if line.startswith("data: "):
-                    chunk = line[6:]
-                    if chunk == "[DONE]":
-                        return
-                    try:
-                        yield json.loads(chunk)
-                    except json.JSONDecodeError:
-                        pass
-        return _lines()
+        try:
+            resp = urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT)
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode(errors="replace")
+            # If rate-limited, try next key
+            if e.code == 429 and attempt < attempts - 1:
+                logger.warning("OpenRouter 429 for key index %d, falling back to next key", idx)
+                last_exc = e
+                continue
+            raise RuntimeError(f"OpenRouter {e.code}: {body_text}") from e
 
-    return json.loads(resp.read().decode())
+        if stream:
+            def _lines():
+                for raw in resp:
+                    line = raw.decode().strip()
+                    if line.startswith("data: "):
+                        chunk = line[6:]
+                        if chunk == "[DONE]":
+                            return
+                        try:
+                            yield json.loads(chunk)
+                        except json.JSONDecodeError:
+                            pass
+            return _lines()
+
+        return json.loads(resp.read().decode())
+
+    # If we get here, all keys failed with 429 or other errors; propagate last
+    # exception if present.
+    if last_exc:
+        raise RuntimeError("All OPENROUTER API keys were rate-limited") from last_exc
+    raise RuntimeError("Failed to contact OpenRouter API with provided keys")
 
 
 def _chat(system: str, user: str, max_tokens: int = 1200, temperature: float = 0.2) -> str:

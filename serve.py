@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-BrowserForensix — serve.py
+BrowserForensix â€” serve.py
 Runs analyzer, starts Flask server, opens browser automatically.
 
 FIXES IN THIS FILE:
@@ -19,11 +19,17 @@ import json
 import math
 import re
 import threading
+import time
 import webbrowser
 from pathlib import Path
-from datetime import datetime, timezone
-from urllib.parse import urlparse
 from collections import defaultdict
+
+from analysis.sessions import (
+    build_unified_events as _build_unified_events,
+    domain_of,
+    norm_dt as _norm_dt,
+    reconstruct_sessions as _reconstruct_sessions,
+)
 
 try:
     from flask import Flask, jsonify, request, render_template, abort
@@ -32,13 +38,24 @@ except ImportError:
     raise
 
 import analyzer
+try:
+    import leveldb_reader
+    _LDB_AVAILABLE = True
+except Exception:
+    _LDB_AVAILABLE = False
 
 try:
     from ai_routes import register_ai_routes
     _AI_AVAILABLE = True
 except ImportError:
     _AI_AVAILABLE = False
-    print("[WARN] ai_routes.py not found — AI features disabled")
+    print("[WARN] ai_routes.py not found â€” AI features disabled")
+
+try:
+    from data_routes import register_data_routes
+    _DATA_AVAILABLE = True
+except ImportError:
+    _DATA_AVAILABLE = False
 
 try:
     from ctf_routes import register_ctf_routes
@@ -59,35 +76,90 @@ ANALYSIS_FILE = DATA_DIR / "analysis.json"
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-# ── Data loader ───────────────────────────────────────────────────────────────
 
-_analysis        = None
-_analysis_mtime: float = 0.0
-_analysis_lock   = threading.RLock()
+@app.after_request
+def _set_csp(response):
+    """Set a strict Content-Security-Policy header.
 
+    The app uses no external scripts except cdnjs; reflect that here.
+    Includes script-src, style-src, connect-src, and frame-ancestors 'none'.
+    """
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; "
+        "style-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; "
+        "connect-src 'self' https://openrouter.ai; "
+        "frame-ancestors 'none';"
+    )
+    response.headers['Content-Security-Policy'] = csp
+    return response
 
-def load_analysis() -> dict:
-    """Load analysis.json, re-reading from disk if modified. Thread-safe."""
-    global _analysis, _analysis_mtime
-    with _analysis_lock:
-        if not ANALYSIS_FILE.exists():
-            return {}
-        current_mtime = ANALYSIS_FILE.stat().st_mtime
-        if _analysis is None or current_mtime != _analysis_mtime:
-            _analysis      = json.loads(ANALYSIS_FILE.read_text(encoding="utf-8"))
-            _analysis_mtime = current_mtime
-        return _analysis
-
-
-def reload_analysis() -> dict:
-    global _analysis, _analysis_mtime
-    with _analysis_lock:
-        _analysis       = None
-        _analysis_mtime = 0.0
-    return load_analysis()
+# â”€â”€ Analysis cache (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+class AnalysisCache:
+    """Thread-safe cache for reading analysis.json with lazy reload.
+
+    Methods:
+      - get() -> dict: return parsed analysis.json (or {} if missing)
+      - invalidate(): force next get() to re-read file
+      - last_modified: float mtime of the analysis file or 0.0
+    """
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._lock = threading.RLock()
+        self._data = None
+        self._mtime = 0.0
+
+    @property
+    def last_modified(self) -> float:
+        with self._lock:
+            return self._mtime
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._data = None
+            self._mtime = 0.0
+
+    def get(self) -> dict:
+        with self._lock:
+            if not self._path.exists():
+                return {}
+            try:
+                current = self._path.stat().st_mtime
+            except Exception:
+                current = 0.0
+            if self._data is None or current != self._mtime:
+                try:
+                    self._data = json.loads(self._path.read_text(encoding="utf-8"))
+                    self._mtime = current
+                except Exception:
+                    # If parse fails, don't clobber existing cache; return empty
+                    return {}
+            return self._data
+
+
+# Create a module-level cache instance
+analysis_cache = AnalysisCache(ANALYSIS_FILE)
+
+# Reanalysis watcher state
+_reanalysis_pending = False
+_reanalysis_lock = threading.Lock()
+
+
+def reanalysis_pending() -> bool:
+    with _reanalysis_lock:
+        return _reanalysis_pending
+
+
+def _set_reanalysis_pending(val: bool) -> None:
+    global _reanalysis_pending
+    with _reanalysis_lock:
+        _reanalysis_pending = bool(val)
+
+
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def paginate(items: list, page: int, per_page: int = 50) -> dict:
     total       = len(items)
@@ -130,34 +202,20 @@ def _is_valid_domain(domain: str) -> bool:
     return len(labels) >= 2 and all(_VALID_LABEL_RE.match(lbl) for lbl in labels)
 
 
-def domain_of(url: str) -> str:
-    netloc = urlparse(url).netloc.lower().split(":")[0]
-    return netloc.removeprefix("www.")
-
-
 def _validate_domain_param(raw: str) -> str:
     domain = raw.lower().strip().removeprefix("www.")
     if not domain or len(domain) < 4 or len(domain) > 253:
-        abort(400, description="Invalid domain: must be 4–253 characters.")
+        abort(400, description="Invalid domain: must be 4-253 characters.")
     if not _is_valid_domain(domain):
         abort(400, description="Invalid domain syntax.")
     return domain
 
 
-def _norm_dt(ts: str) -> "datetime | None":
-    if not ts:
-        return None
-    try:
-        normalised = ts.strip().replace("Z", "+00:00")
-        normalised = re.sub(r' (\d{2}:\d{2})$', r'+\1', normalised)
-        return datetime.fromisoformat(normalised).astimezone(timezone.utc)
-    except (ValueError, TypeError):
-        return None
+# Domain extraction and timestamp parsing live in analysis/sessions.py.
 
-
-# ── Origin guard ──────────────────────────────────────────────────────────────
+# â”€â”€ Origin guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # FIX-5: Previous guard returned 403 for any request with a Referer header
-# that wasn't localhost — this silently broke BurpSuite, Postman with a
+# that wasn't localhost â€” this silently broke BurpSuite, Postman with a
 # base URL set, and browser extensions that inject a Referer header.
 # The fixed rule: only block when Origin or Referer is PRESENT and does NOT
 # match localhost. Absent headers = same-origin or tool use = allow.
@@ -175,10 +233,10 @@ def _guard_api_origin():
         abort(403, description="Cross-origin API access denied.")
     if not origin and referer and not _LOCALHOST_RE.match(referer):
         abort(403, description="Cross-origin API access denied.")
-    # No Origin, no Referer → allow unconditionally (curl, Postman, proxies)
+    # No Origin, no Referer â†’ allow unconditionally (curl, Postman, proxies)
 
 
-# ── Page routes ───────────────────────────────────────────────────────────────
+# â”€â”€ Page routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/")
 def index():
@@ -208,6 +266,16 @@ def timeline_page():
 def investigate_page():
     return render_template("investigate.html", active="investigate")
 
+
+@app.route("/diff")
+def diff_page():
+    return render_template("diff.html", active="diff")
+
+
+@app.route("/localstorage")
+def localstorage_page():
+    return render_template("localstorage.html", active="localstorage")
+
 @app.route("/report")
 def report_page():
     return render_template("report.html", active="report")
@@ -221,7 +289,7 @@ def ctf_page():
     return render_template("ctf.html", active="ctf")
 
 
-# ── API: Status ───────────────────────────────────────────────────────────────
+# â”€â”€ API: Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/status")
 def api_status():
@@ -236,20 +304,21 @@ def api_status():
             "ready":   False,
             "message": "analysis.json not found. Restart serve.py.",
         })
-    data = load_analysis()
+    data = analysis_cache.get()
     return jsonify({
-        "ready":   True,
-        "meta":    data.get("meta",    {}),
+        "ready": True,
+        "meta": data.get("meta", {}),
         "summary": data.get("summary", {}),
-        "hashes":  data.get("hashes",  {}),
+        "hashes": data.get("hashes", {}),
+        "reanalysis_pending": reanalysis_pending(),
     })
 
 
-# ── API: Profiles ─────────────────────────────────────────────────────────────
+# â”€â”€ API: Profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/profiles")
 def api_profiles():
-    data = load_analysis()
+    data = analysis_cache.get()
     if not data:
         return jsonify({"profiles": []})
     meta          = data.get("meta", {})
@@ -275,11 +344,11 @@ def api_profiles():
     return jsonify({"profiles": profiles, "count": len(profiles)})
 
 
-# ── API: Overview ─────────────────────────────────────────────────────────────
+# â”€â”€ API: Overview â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/overview")
 def api_overview():
-    data = load_analysis()
+    data = analysis_cache.get()
     if not data:
         return jsonify({"error": "No analysis data. Run extract.py first."}), 404
     meta = data.get("meta", {})
@@ -294,303 +363,37 @@ def api_overview():
     })
 
 
-# ── API: History ──────────────────────────────────────────────────────────────
-
-@app.route("/api/history")
-def api_history():
-    data     = load_analysis()
-    items    = data.get("history", [])
-    q        = request.args.get("q",        "").lower()
-    profile  = request.args.get("profile",  "").strip()
-    protocol = request.args.get("protocol", "all").lower()
-    risk     = request.args.get("risk",     "any").lower()
-    date_from = request.args.get("from",    "")
-    date_to   = request.args.get("to",      "")
-    page      = _safe_int(request.args.get("page", 1))
-
-    if profile:
-        items = [i for i in items if i.get("profile", "") == profile]
-    if q:
-        items = [i for i in items if q in i.get("url", "").lower() or q in i.get("title", "").lower()]
-    if protocol in ("http", "https"):
-        items = [i for i in items if i.get("url", "").startswith(protocol + "://")]
-    if risk != "any":
-        items = filter_risk(items, risk)
-    if date_from or date_to:
-        df     = _norm_dt(date_from + "T00:00:00+00:00") if date_from else None
-        dt_end = _norm_dt(date_to   + "T23:59:59+00:00") if date_to   else None
-
-        def _in_range(item):
-            ts = _norm_dt(item.get("last_visit", ""))
-            if ts is None:                      return True
-            if df     and ts < df:              return False
-            if dt_end and ts > dt_end:          return False
-            return True
-        items = [i for i in items if _in_range(i)]
-
-    return jsonify(paginate(items, page))
+# History API moved to data_routes.py blueprint
 
 
-# ── API: Cookies ──────────────────────────────────────────────────────────────
-
-@app.route("/api/cookies")
-def api_cookies():
-    data    = load_analysis()
-    items   = data.get("cookies", [])
-    profile = request.args.get("profile", "").strip()
-    ctype   = request.args.get("type",    "all").lower()
-    host    = request.args.get("host",    "").strip().lower()
-    expired = request.args.get("expired", "all")
-    secure  = request.args.get("secure",  "all")
-    page    = _safe_int(request.args.get("page", 1))
-
-    if profile:
-        items = [i for i in items if i.get("profile", "") == profile]
-    if ctype != "all":
-        items = [i for i in items if i.get("type", "").lower() == ctype]
-    if host:
-        items = [i for i in items if host in i.get("host", "").lower()]
-    if expired == "yes":
-        items = [i for i in items if i.get("type") == "Zombie"]
-    elif expired == "no":
-        items = [i for i in items if i.get("type") != "Zombie"]
-    if secure == "secure":
-        items = [i for i in items if i.get("secure", False)]
-    elif secure == "insecure":
-        items = [i for i in items if not i.get("secure", False)]
-
-    return jsonify(paginate(items, page))
+# Cookies API moved to data_routes.py blueprint
 
 
-# ── API: Bookmarks ────────────────────────────────────────────────────────────
-
-@app.route("/api/bookmarks")
-def api_bookmarks():
-    data      = load_analysis()
-    bookmarks = data.get("bookmarks", [])
-    tree      = defaultdict(list)
-    for b in bookmarks:
-        tree[b.get("folder", "Other")].append(b)
-
-    q = request.args.get("q", "").lower()
-    if q:
-        bookmarks = [b for b in bookmarks
-                     if q in b.get("title", "").lower() or q in b.get("url", "").lower()]
-        return jsonify({"items": bookmarks, "total": len(bookmarks)})
-
-    return jsonify({"tree": dict(tree), "total": len(bookmarks)})
+# Bookmarks API moved to data_routes.py blueprint
 
 
-# ── API: Downloads ────────────────────────────────────────────────────────────
-
-@app.route("/api/downloads")
-def api_downloads():
-    data    = load_analysis()
-    items   = data.get("downloads", [])
-    q       = request.args.get("q",       "").lower()
-    profile = request.args.get("profile", "").strip()
-    risk    = request.args.get("risk",    "any").lower()
-    page    = _safe_int(request.args.get("page", 1))
-
-    if profile:
-        items = [i for i in items if i.get("profile", "") == profile]
-    if q:
-        items = [i for i in items if q in i.get("filename",   "").lower()
-                 or q in i.get("source_url", "").lower()]
-    if risk != "any":
-        items = filter_risk(items, risk)
-
-    return jsonify(paginate(items, page))
+# Downloads API moved to data_routes.py blueprint
 
 
-# ── Session reconstruction ────────────────────────────────────────────────────
+# Session reconstruction lives in analysis/sessions.py.
 
-def _build_unified_events(data: dict, types: "set | None" = None) -> list:
-    if types is None:
-        types = {"history", "cookies", "downloads"}
-
-    events = []
-
-    if "history" in types:
-        for h in data.get("history", []):
-            if h.get("last_visit"):
-                events.append({
-                    "type":       "history",
-                    "time":       h["last_visit"],
-                    "url":        h.get("url",   ""),
-                    "title":      h.get("title", ""),
-                    "domain":     domain_of(h.get("url", "")),
-                    "risk_score": h.get("risk_score", 0),
-                })
-
-    if "cookies" in types:
-        for c in data.get("cookies", []):
-            if c.get("created"):
-                events.append({
-                    "type":        "cookie",
-                    "time":        c["created"],
-                    "host":        c.get("host",  ""),
-                    "name":        c.get("name",  ""),
-                    "cookie_type": c.get("type",  ""),
-                    "risk_score":  c.get("risk_score", 0),
-                })
-
-    if "downloads" in types:
-        for dl in data.get("downloads", []):
-            if dl.get("start_time"):
-                events.append({
-                    "type":       "download",
-                    "time":       dl["start_time"],
-                    "filename":   dl.get("filename",   ""),
-                    "source_url": dl.get("source_url", ""),
-                    "domain":     domain_of(dl.get("source_url", "")),
-                    "risk_score": dl.get("risk_score", 0),
-                })
-
-    def _sort_key(e: dict) -> datetime:
-        ts = e.get("time", "")
-        try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
-        except (ValueError, TypeError):
-            return datetime.fromtimestamp(0, tz=timezone.utc)
-
-    events.sort(key=_sort_key, reverse=True)
-    return events
+# Timeline API moved to data_routes.py blueprint
 
 
-def _reconstruct_sessions(events: list, gap_seconds: int = 1800) -> list:
-    if not events:
-        return []
-
-    sessions: list = []
-    current:  list = []
-    last_t: "datetime | None" = None
-
-    for e in reversed(events):
-        t = _norm_dt(e.get("time", ""))
-        if t is None:
-            continue
-        if last_t is None or (t - last_t).total_seconds() > gap_seconds:
-            if current:
-                sessions.append(current)
-            current = [e]
-        else:
-            current.append(e)
-        last_t = t
-
-    if current:
-        sessions.append(current)
-
-    sessions.reverse()
-    return [
-        {
-            "start":  s[0]["time"],
-            "end":    s[-1]["time"],
-            "count":  len(s),
-            "events": s,
-        }
-        for s in sessions
-    ]
+# Domain API moved to data_routes.py blueprint
 
 
-# ── API: Timeline ─────────────────────────────────────────────────────────────
-
-@app.route("/api/timeline")
-def api_timeline():
-    data        = load_analysis()
-    types_param = request.args.get("types", "history,cookies,downloads")
-    types       = set(types_param.split(","))
-    events      = _build_unified_events(data, types)
-
-    date_from_str = request.args.get("from", "")
-    date_to_str   = request.args.get("to",   "")
-
-    if date_from_str or date_to_str:
-        df     = _norm_dt(date_from_str) if date_from_str else None
-        dt_end = _norm_dt(date_to_str)   if date_to_str   else None
-
-        def _in_range(e: dict) -> bool:
-            ts = _norm_dt(e.get("time", ""))
-            if ts is None:             return True
-            if df     and ts < df:     return False
-            if dt_end and ts > dt_end: return False
-            return True
-
-        events = [e for e in events if _in_range(e)]
-
-    sessions = _reconstruct_sessions(events)
-    return jsonify({"events": events[:500], "sessions": sessions, "total": len(events)})
+# Sessions API moved to data_routes.py blueprint
 
 
-# ── API: Domain ───────────────────────────────────────────────────────────────
-
-@app.route("/api/domain/<domain>")
-def api_domain(domain: str):
-    domain = _validate_domain_param(domain)
-    data   = load_analysis()
-
-    def _matches(candidate: str) -> bool:
-        return candidate == domain or candidate.endswith("." + domain)
-
-    history   = [h for h in data.get("history",   []) if _matches(domain_of(h.get("url", "")))]
-    cookies   = [c for c in data.get("cookies",   []) if _matches(c.get("host", "").lstrip(".").removeprefix("www."))]
-    downloads = [d for d in data.get("downloads", []) if _matches(domain_of(d.get("source_url", "")))]
-
-    parsed_times = [_norm_dt(h.get("last_visit", "")) for h in history]
-    parsed_times = [t for t in parsed_times if t is not None]
-
-    return jsonify({
-        "domain":         domain,
-        "history":        history,
-        "cookies":        cookies,
-        "downloads":      downloads,
-        "first_seen":     min(parsed_times).isoformat() if parsed_times else "",
-        "last_seen":      max(parsed_times).isoformat() if parsed_times else "",
-        "total_visits":   sum(h.get("visit_count", 1) for h in history),
-        "max_risk_score": max((h.get("risk_score", 0) for h in history), default=0),
-        "risk_reasons":   list({r for h in history for r in h.get("risk_reasons", [])}),
-        "in_history":     len(history) > 0,
-    })
+# Search API moved to data_routes.py blueprint
 
 
-# ── API: Sessions ─────────────────────────────────────────────────────────────
-
-@app.route("/api/sessions")
-def api_sessions():
-    data   = load_analysis()
-    events = _build_unified_events(data, types={"history", "cookies", "downloads"})
-    return jsonify({"sessions": _reconstruct_sessions(events)})
-
-
-# ── API: Search ───────────────────────────────────────────────────────────────
-
-@app.route("/api/search")
-def api_search():
-    data = load_analysis()
-    q    = request.args.get("q", "").lower()
-    if not q or len(q) < 2:
-        return jsonify({"error": "Query too short"}), 400
-
-    all_history   = [h for h in data.get("history",   []) if q in h.get("url",      "").lower() or q in h.get("title",      "").lower()]
-    all_cookies   = [c for c in data.get("cookies",   []) if q in c.get("host",     "").lower() or q in c.get("name",       "").lower()]
-    all_bookmarks = [b for b in data.get("bookmarks", []) if q in b.get("title",    "").lower() or q in b.get("url",        "").lower()]
-    all_downloads = [d for d in data.get("downloads", []) if q in d.get("filename", "").lower() or q in d.get("source_url", "").lower()]
-
-    return jsonify({
-        "history":       all_history[:20],
-        "cookies":       all_cookies[:20],
-        "bookmarks":     all_bookmarks[:20],
-        "downloads":     all_downloads[:20],
-        "total":         len(all_history) + len(all_cookies) + len(all_bookmarks) + len(all_downloads),
-        "total_preview": 20,
-    })
-
-
-# ── API: Report ───────────────────────────────────────────────────────────────
+# â”€â”€ API: Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.route("/api/report")
 def api_report():
-    data = load_analysis()
+    data = analysis_cache.get()
     return jsonify({
         "meta":      data.get("meta",      {}),
         "hashes":    data.get("hashes",    {}),
@@ -604,92 +407,173 @@ def api_report():
     })
 
 
-# ── API: Relationship Graph ───────────────────────────────────────────────────
+@app.route('/api/diff')
+def api_diff():
+    """Return a structured diff between two analysis JSON files.
 
-@app.route("/api/graph")
-def api_graph():
-    data      = load_analysis()
-    history   = data.get("history",   [])
-    cookies   = data.get("cookies",   [])
-    downloads = data.get("downloads", [])
+    Query params: a=<path_or_filename>&b=<path_or_filename>
+    Paths are resolved relative to the data directory unless absolute.
+    """
+    a = request.args.get('a') or request.args.get('file_a')
+    b = request.args.get('b') or request.args.get('file_b')
+    if not a or not b:
+        return jsonify({'error': 'Missing query params a and b'}), 400
 
-    domain_meta = {}
-    for h in history:
-        d = domain_of(h.get("url", ""))
-        if not d:
+    def resolve(p):
+        raw = str(p).strip()
+        if not raw:
+            return None
+        pth = Path(raw)
+        if not pth.is_absolute():
+            pth = DATA_DIR / pth
+        try:
+            pth = pth.resolve()
+        except Exception:
+            return None
+        try:
+            data_root = DATA_DIR.resolve()
+            if data_root not in pth.parents:
+                return None
+        except Exception:
+            return None
+        if pth.suffix.lower() != ".json" or not pth.is_file():
+            return None
+        return pth
+
+    pa = resolve(a)
+    pb = resolve(b)
+    if not pa or not pa.exists() or not pb or not pb.exists():
+        return jsonify({'error': 'One or both files not found or disallowed'}), 404
+
+    try:
+        da = json.loads(pa.read_text(encoding='utf-8'))
+        db = json.loads(pb.read_text(encoding='utf-8'))
+    except Exception as e:
+        return jsonify({'error': f'Failed to parse files: {e}'}), 500
+
+    # Helper to build simple keys
+    def hk_history(h):
+        return (h.get('url',''), h.get('last_visit',''))
+
+    def hk_cookie(c):
+        return (c.get('host',''), c.get('name',''))
+
+    def hk_download(d):
+        return (d.get('filename',''), d.get('start_time',''))
+
+    a_hist = {hk_history(h): h for h in da.get('history', [])}
+    b_hist = {hk_history(h): h for h in db.get('history', [])}
+
+    new_history = [v for k, v in b_hist.items() if k not in a_hist]
+
+    a_cookies = {hk_cookie(c): c for c in da.get('cookies', [])}
+    b_cookies = {hk_cookie(c): c for c in db.get('cookies', [])}
+    removed_cookies = [v for k, v in a_cookies.items() if k not in b_cookies]
+
+    a_dl = {hk_download(d): d for d in da.get('downloads', [])}
+    b_dl = {hk_download(d): d for d in db.get('downloads', [])}
+    new_downloads = [v for k, v in b_dl.items() if k not in a_dl]
+
+    changed_risks = []
+    # Compare matching items by identity and record changes
+    for k, a_item in a_hist.items():
+        b_item = b_hist.get(k)
+        if b_item and a_item.get('risk_score') != b_item.get('risk_score'):
+            changed_risks.append({'type': 'history', 'id': k[0], 'before': a_item.get('risk_score'), 'after': b_item.get('risk_score')})
+    for k, a_item in a_cookies.items():
+        b_item = b_cookies.get(k)
+        if b_item and a_item.get('risk_score') != b_item.get('risk_score'):
+            changed_risks.append({'type': 'cookie', 'id': f"{k[0]}::{k[1]}", 'before': a_item.get('risk_score'), 'after': b_item.get('risk_score')})
+    for k, a_item in a_dl.items():
+        b_item = b_dl.get(k)
+        if b_item and a_item.get('risk_score') != b_item.get('risk_score'):
+            changed_risks.append({'type': 'download', 'id': k[0], 'before': a_item.get('risk_score'), 'after': b_item.get('risk_score')})
+
+    return jsonify({
+        'new_history': new_history,
+        'removed_cookies': removed_cookies,
+        'new_downloads': new_downloads,
+        'changed_risks': changed_risks,
+    })
+
+
+@app.route('/api/localstorage')
+def api_localstorage():
+    """Return localStorage/sessionStorage entries for each extracted profile.
+
+    Uses leveldb_reader.read_all_storage(profile_path) when available.
+    """
+    if not _LDB_AVAILABLE:
+        return jsonify({'error': 'LevelDB reader unavailable'}), 501
+    data = analysis_cache.get()
+    profiles = data.get('meta', {}).get('profiles_extracted', [])
+    out = []
+    for p in profiles:
+        path = p.get('path') or p.get('dir')
+        if not path:
             continue
-        if d not in domain_meta:
-            domain_meta[d] = {"visits": 0, "risk": 0, "has_download": False, "has_cookie": False}
-        domain_meta[d]["visits"] += h.get("visit_count", 1)
-        domain_meta[d]["risk"]    = max(domain_meta[d]["risk"], h.get("risk_score", 0))
+        profile_path = Path(path)
+        if not profile_path.is_absolute():
+            profile_path = BASE_DIR / profile_path
+        if not profile_path.exists():
+            continue
+        try:
+            entries = leveldb_reader.read_all_storage(profile_path)
+        except Exception as e:
+            entries = []
+        out.extend(entries)
 
+    # Flag sensitive values that parse as JSON and contain sensitive keys
+    sensitive_keys = {'token', 'auth', 'password', 'key'}
+    for e in out:
+        e['sensitive'] = False
+        try:
+            v = json.loads(e.get('value',''))
+            if isinstance(v, dict) and any(k.lower() in sensitive_keys for k in v.keys()):
+                e['sensitive'] = True
+        except Exception:
+            # Not JSON â€” do a simple substring check
+            val = (e.get('value') or '').lower()
+            if any(sk in val for sk in sensitive_keys):
+                e['sensitive'] = True
+
+    # Simple pagination via query params
+    page = _safe_int(request.args.get('page', 1), default=1)
+    per = _safe_int(request.args.get('per_page', 50), default=50)
+    paged = paginate(out, page, per)
+    return jsonify(paged)
+
+
+@app.route('/api/ghost_domains')
+def api_ghost_domains():
+    """Return domains that have cookies but no history entries.
+
+    For each domain include cookie names and creation timestamps.
+    """
+    data = analysis_cache.get()
+    cookies = data.get('cookies', [])
+    history = data.get('history', [])
+    hist_domains = set(domain_of(h.get('url','')) for h in history if h.get('url'))
+    by_domain = {}
     for c in cookies:
-        d = c.get("host", "").lstrip(".").removeprefix("www.")
-        if d:
-            domain_meta.setdefault(d, {"visits": 0, "risk": c.get("risk_score", 0),
-                                       "has_download": False, "has_cookie": True})
-            domain_meta[d]["has_cookie"] = True
+        host = (c.get('host') or '').lstrip('.')
+        dom = host
+        if dom not in by_domain:
+            by_domain[dom] = []
+        by_domain[dom].append({'name': c.get('name'), 'created': c.get('created')})
 
-    for dl in downloads:
-        d = domain_of(dl.get("source_url", ""))
-        if d:
-            domain_meta.setdefault(d, {"visits": 0, "risk": dl.get("risk_score", 0),
-                                       "has_download": False, "has_cookie": False})
-            domain_meta[d]["has_download"] = True
-            domain_meta[d]["risk"]          = max(domain_meta[d]["risk"], dl.get("risk_score", 0))
+    ghosts = []
+    for dom, cs in by_domain.items():
+        if dom and dom not in hist_domains:
+            ghosts.append({'domain': dom, 'cookies': cs})
 
-    top = sorted(domain_meta.items(),
-                 key=lambda x: x[1]["visits"] * 2 + x[1]["risk"],
-                 reverse=True)[:60]
-    top_domains = {d for d, _ in top}
-
-    nodes = []
-    for d, m in top:
-        risk  = m["risk"]
-        group = "flagged" if risk >= 61 else "moderate" if risk >= 31 else "normal"
-        nodes.append({"id": d, "visits": m["visits"], "risk": risk, "group": group,
-                       "has_cookie": m["has_cookie"], "has_download": m["has_download"]})
-
-    edges      = []
-    seen_edges = set()
-    root_map   = defaultdict(list)
-    for c in cookies:
-        host = c.get("host", "").lstrip(".")
-        root = ".".join(host.split(".")[-2:]) if host.count(".") >= 1 else host
-        d    = host.removeprefix("www.")
-        if d in top_domains:
-            root_map[root].append(d)
-
-    for root, doms in root_map.items():
-        unique = list(set(doms))
-        for i in range(len(unique)):
-            for j in range(i + 1, len(unique)):
-                a, b = sorted([unique[i], unique[j]])
-                key  = (a, b, "shared_cookie")
-                if key not in seen_edges:
-                    seen_edges.add(key)
-                    edges.append({"source": a, "target": b, "type": "shared_cookie"})
-
-    events   = _build_unified_events(data)
-    sessions = _reconstruct_sessions(events)
-    for session in sessions:
-        sess_domains = list({
-            domain_of(e.get("url", ""))
-            for e in session.get("events", [])
-            if e.get("type") == "history" and domain_of(e.get("url", "")) in top_domains
-        })
-        for i in range(len(sess_domains)):
-            for j in range(i + 1, len(sess_domains)):
-                a, b = sorted([sess_domains[i], sess_domains[j]])
-                key  = (a, b, "same_session")
-                if key not in seen_edges:
-                    seen_edges.add(key)
-                    edges.append({"source": a, "target": b, "type": "same_session"})
-
-    return jsonify({"nodes": nodes, "edges": edges})
+    return jsonify({'ghosts': ghosts})
 
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+# Graph API moved to data_routes.py blueprint
+
+
+# â”€â”€ Startup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def startup():
     print("\n=== BrowserForensix ===")
@@ -697,7 +581,7 @@ def startup():
         print(f"[WARN] No evidence.json at {EVIDENCE_FILE}")
         print("       Run: python extract.py --browser chrome\n")
     else:
-        print("[INFO] Running analyzer…")
+        print("[INFO] Running analyzerâ€¦")
         try:
             analyzer.run()
         except Exception as e:
@@ -706,7 +590,7 @@ def startup():
     if _AI_AVAILABLE:
         # FIX-4: Pass helpers dict so ai_routes.py never needs to import from serve.
         # Previously ai_routes imported domain_of, _norm_dt, etc. from serve at
-        # request time — a circular import that worked by accident and will break
+        # request time â€” a circular import that worked by accident and will break
         # on any import-order change.
         helpers = {
             "domain_of":              domain_of,
@@ -714,17 +598,63 @@ def startup():
             "_build_unified_events":  _build_unified_events,
             "_reconstruct_sessions":  _reconstruct_sessions,
         }
-        register_ai_routes(app, load_analysis, helpers)
+        register_ai_routes(app, analysis_cache.get, helpers)
     else:
-        print("[INFO] AI features not available — add ai_engine.py and ai_routes.py")
+        print("[INFO] AI features not available â€” add ai_engine.py and ai_routes.py")
+
+    # Register data routes blueprint (history, cookies, downloads, timeline, domain, sessions, search, graph)
+    if _DATA_AVAILABLE:
+        helpers = {
+            "domain_of": domain_of,
+            "_norm_dt": _norm_dt,
+            "_build_unified_events": _build_unified_events,
+            "_reconstruct_sessions": _reconstruct_sessions,
+            "paginate": paginate,
+            "filter_risk": filter_risk,
+            "_safe_int": _safe_int,
+            "_validate_domain_param": _validate_domain_param,
+        }
+        register_data_routes(app, analysis_cache.get, helpers)
+    else:
+        print("[INFO] data_routes.py not available â€” data APIs remain in serve.py")
 
     if _CTF_AVAILABLE:
-        register_ctf_routes(app, load_analysis)
+        register_ctf_routes(app, analysis_cache.get)
 
     if _PDF_AVAILABLE:
-        register_pdf_routes(app, load_analysis)
+        register_pdf_routes(app, analysis_cache.get)
 
     print("[INFO] Starting Flask on http://localhost:5000")
+    # Start reanalysis watcher thread (polling) to auto-run analyzer when evidence.json changes
+    def _reanalysis_watcher(poll_interval: float = 2.0):
+        last_mtime = 0.0
+        if EVIDENCE_FILE.exists():
+            try:
+                last_mtime = EVIDENCE_FILE.stat().st_mtime
+            except Exception:
+                last_mtime = 0.0
+        while True:
+            try:
+                if EVIDENCE_FILE.exists():
+                    m = EVIDENCE_FILE.stat().st_mtime
+                    if m != last_mtime:
+                        last_mtime = m
+                        _set_reanalysis_pending(True)
+                        try:
+                            print("[INFO] evidence.json changed â€” running analyzer")
+                            analyzer.run()
+                            analysis_cache.invalidate()
+                        except Exception as e:
+                            print(f"[ERROR] Analyzer failed: {e}")
+                        finally:
+                            _set_reanalysis_pending(False)
+            except Exception:
+                pass
+            time.sleep(poll_interval)
+
+    t = threading.Thread(target=_reanalysis_watcher, daemon=True)
+    t.start()
+
     threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5000")).start()
 
 

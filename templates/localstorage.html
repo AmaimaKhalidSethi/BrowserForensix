@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %} — LocalStorage{% endblock %}
+{% block page_title %}LocalStorage{% endblock %}
+
+{% block content %}
+<div class="bfx-filter-bar" style="margin-bottom:12px;">
+  <input type="text" id="lsSearch" class="bfx-filter-input" placeholder="Search origin or key…" style="width:280px;">
+  <button class="bfx-btn outline sm" id="lsRefresh" style="margin-left:auto;">Refresh</button>
+</div>
+
+<table class="bfx-table">
+  <thead><tr><th>Origin</th><th>Key</th><th>Value</th><th>Profile</th><th style="width:80px;">Sensitive</th></tr></thead>
+  <tbody id="lsBody"><tr><td colspan="5" class="bfx-loading">Loading localStorage…</td></tr></tbody>
+</table>
+
+<div class="bfx-pagination">
+  <button class="bfx-page-btn" id="lsPrev" disabled onclick="localStoragePage(-1)">← Prev</button>
+  <span id="lsPageInfo">—</span>
+  <button class="bfx-page-btn" id="lsNext" onclick="localStoragePage(1)">Next →</button>
+  <span style="margin-left:auto;" id="lsTotal" class="muted"></span>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function loadLocalStorage(reset = false) {
+    if (reset) setPageState('localstorage','page', 1);
+    const page = pageState.localstorage.page || 1;
+    const per  = pageState.localstorage.per_page || 50;
+    const q    = pageState.localstorage.q || '';
+    const params = new URLSearchParams({ page, per_page: per, q });
+    const data = await API.get(`/api/localstorage?${params}`);
+    const tbody = document.getElementById('lsBody');
+    if (!data) { tbody.innerHTML = '<tr><td colspan="5" class="bfx-error">Failed to load.</td></tr>'; return; }
+    tbody.innerHTML = '';
+    if (!data.items || !data.items.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="muted">No entries.</td></tr>';
+    } else {
+      data.items.forEach(e => {
+        const safeVal = esc(String(e.value || ''));
+        const valShort = safeVal.length > 120 ? safeVal.slice(0,117) + '…' : safeVal;
+        const row = `<tr>
+          <td class="mono">${esc(e.origin)}</td>
+          <td class="mono">${esc(e.key)}</td>
+          <td style="font-size:12px;max-width:400px;white-space:pre-wrap;">${valShort}</td>
+          <td class="mono">${esc(e.profile)}</td>
+          <td>${e.sensitive ? '<strong style="color:var(--accent-action);">Yes</strong>' : 'No'}</td>
+        </tr>`;
+        tbody.insertAdjacentHTML('beforeend', row);
+      });
+    }
+    if (window.lsPaginator && typeof window.lsPaginator.update === 'function') window.lsPaginator.update(data);
+  }
+
+  document.getElementById('lsSearch')?.addEventListener('input', e => {
+    clearTimeout(window._lsSearchDeb);
+    window._lsSearchDeb = setTimeout(() => { setPageState('localstorage','q', e.target.value.trim()); loadLocalStorage(true); }, 280);
+  });
+
+  document.getElementById('lsRefresh')?.addEventListener('click', () => { loadLocalStorage(true); });
+
+  // Paginator instance for localstorage
+  window.lsPaginator = new Paginator('ls', loadLocalStorage, pageState.localstorage);
+  window.localStoragePage = function(dir) { window.lsPaginator?.page(dir); };
+
+  loadLocalStorage();
+</script>
+{% endblock %}

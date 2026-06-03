@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %} — Diff{% endblock %}
+{% block page_title %}Diff Between Extractions{% endblock %}
+
+{% block content %}
+<div style="margin-bottom:12px;">
+  <div style="display:flex;gap:8px;align-items:center;">
+    <input class="bfx-invest-input" type="text" id="diffA" placeholder="data/analysis_old.json" style="width:360px;">
+    <input class="bfx-invest-input" type="text" id="diffB" placeholder="data/analysis_new.json" style="width:360px;">
+    <button class="bfx-btn sm" id="runDiffBtn">Compare</button>
+  </div>
+  <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">Paths are resolved relative to the <code>data/</code> directory.</div>
+</div>
+
+<div id="diffResult">
+  <div class="bfx-loading">No diff run yet.</div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('runDiffBtn')?.addEventListener('click', async () => {
+    const a = document.getElementById('diffA').value.trim();
+    const b = document.getElementById('diffB').value.trim();
+    const out = document.getElementById('diffResult');
+    if (!a || !b) return;
+    out.innerHTML = '<div class="bfx-loading">Computing diff…</div>';
+    const data = await API.get(`/api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+    if (!data) { out.innerHTML = '<div class="bfx-error">Failed to compute diff.</div>'; return; }
+
+    function renderTable(title, items, cols) {
+      if (!items || items.length === 0) return `<div style="margin-bottom:12px;"><strong>${esc(title)}</strong><div class="muted">None</div></div>`;
+      const rows = items.map(it => `<tr>${cols.map(c => `<td>${esc(String(it[c]||''))}</td>`).join('')}</tr>`).join('');
+      return `<div style="margin-bottom:18px;"><div style="font-weight:bold;margin-bottom:6px;">${esc(title)} (${items.length})</div><table class="bfx-table"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+
+    let html = '';
+    html += renderTable('New History Entries', data.new_history || [], ['url','last_visit','title']);
+    html += renderTable('Removed Cookies', data.removed_cookies || [], ['host','name','created']);
+    html += renderTable('New Downloads', data.new_downloads || [], ['filename','start_time','source_url']);
+    html += renderTable('Changed Risk Scores', data.changed_risks || [], ['type','id','before','after']);
+
+    out.innerHTML = html || '<div class="muted">No differences found.</div>';
+  });
+</script>
+{% endblock %}

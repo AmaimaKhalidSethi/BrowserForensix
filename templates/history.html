@@ -63,10 +63,10 @@
   // Wire filters
   ['histProtoFilter','histRiskFilter','histFromFilter','histToFilter'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => {
-      histState.protocol = document.getElementById('histProtoFilter').value;
-      histState.risk     = document.getElementById('histRiskFilter').value;
-      histState.from     = document.getElementById('histFromFilter').value;
-      histState.to       = document.getElementById('histToFilter').value;
+      setPageState('history','protocol', document.getElementById('histProtoFilter').value);
+      setPageState('history','risk', document.getElementById('histRiskFilter').value);
+      setPageState('history','from', document.getElementById('histFromFilter').value);
+      setPageState('history','to', document.getElementById('histToFilter').value);
       loadHistory(true);
     });
   });
@@ -75,15 +75,10 @@
   document.getElementById('histSearchInput')?.addEventListener('input', e => {
     clearTimeout(histSearchDebounce);
     histSearchDebounce = setTimeout(() => {
-      histState.q = e.target.value.trim();
+      setPageState('history','q', e.target.value.trim());
       loadHistory(true);
     }, 280);
   });
-
-  function histPage(dir) {
-    histState.page = Math.max(1, histState.page + dir);
-    loadHistory();
-  }
 
   function exportHistoryCsv() {
     const rows = [['risk_score','protocol','domain','title','last_visit','visit_count']];

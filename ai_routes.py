@@ -19,6 +19,15 @@ Where helpers is a dict with keys:
 
 import json
 from flask import Blueprint, jsonify, request, Response, stream_with_context
+from werkzeug.exceptions import HTTPException
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    from flask_limiter.errors import RateLimitExceeded
+except Exception:
+    Limiter = None
+    get_remote_address = None
+    RateLimitExceeded = None
 
 try:
     import ai_engine as ai
@@ -62,6 +71,21 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
             return jsonify({"available": False, "reason": "ai_engine module not found"}), 503
         return
 
+    # ── Rate limiting ──────────────────────────────────────────────────────
+    limiter = None
+    if Limiter is not None:
+        limiter = app.extensions.get("limiter")
+        if limiter is None:
+            limiter = Limiter(key_func=get_remote_address, app=app)
+        # Apply default 10/minute to the whole AI blueprint
+        limiter.limit("10 per minute")(ai_bp)
+
+        # Return JSON on rate limit exceeded instead of default HTML
+        if RateLimitExceeded is not None:
+            @app.errorhandler(RateLimitExceeded)
+            def _ratelimit_handler(e):
+                return jsonify({"error": "rate limit exceeded", "detail": str(getattr(e, 'description', ''))}), 429
+
     # Pull helpers out once at registration time — no per-request imports.
     # FIX-4: was `from serve import ...` inside each route function body,
     # creating a circular import (serve imports ai_routes; ai_routes imports serve).
@@ -69,6 +93,10 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
     norm_dt               = helpers["_norm_dt"]
     build_unified_events  = helpers["_build_unified_events"]
     reconstruct_sessions  = helpers["_reconstruct_sessions"]
+    validate_domain_param = helpers.get("_validate_domain_param")
+
+    def _matches_domain(candidate: str, domain: str) -> bool:
+        return candidate == domain or candidate.endswith("." + domain)
 
     # ── Status / health ───────────────────────────────────────────────────────
 
@@ -85,6 +113,10 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
             if not data:
                 return _err("No analysis data", 404)
             return jsonify(ai.ai_executive_summary(data))
+        except HTTPException as e:
+            return _err(e.description, e.code or 400)
+        except HTTPException as e:
+            return _err(e.description, e.code or 400)
         except Exception as e:
             return _err(str(e))
 
@@ -115,10 +147,14 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
     @ai_bp.route("/domain/<domain>")
     def ai_domain(domain):
         try:
+            if validate_domain_param is not None:
+                domain = validate_domain_param(domain)
+            else:
+                domain = domain.lower().strip().removeprefix("www.")
             data      = load_analysis_fn()
-            history   = [h for h in data.get("history",   []) if domain in domain_of(h.get("url", ""))]
-            cookies   = [c for c in data.get("cookies",   []) if domain in c.get("host", "").lstrip(".").removeprefix("www.")]
-            downloads = [d for d in data.get("downloads", []) if domain in domain_of(d.get("source_url", ""))]
+            history   = [h for h in data.get("history",   []) if _matches_domain(domain_of(h.get("url", "")), domain)]
+            cookies   = [c for c in data.get("cookies",   []) if _matches_domain(c.get("host", "").lstrip(".").removeprefix("www."), domain)]
+            downloads = [d for d in data.get("downloads", []) if _matches_domain(domain_of(d.get("source_url", "")), domain)]
 
             parsed_times = [norm_dt(h.get("last_visit", "")) for h in history]
             parsed_times = [t for t in parsed_times if t is not None]
@@ -161,6 +197,10 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         except Exception as e:
             return _err(str(e))
+
+    # Apply stricter rate limit for streaming endpoints (3/minute) if limiter present
+    if limiter is not None:
+        ai_stream_session = limiter.limit("3 per minute")(ai_stream_session)
 
     # ── Download threat assessment ────────────────────────────────────────────
 
@@ -254,6 +294,9 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
         except Exception as e:
             return _err(str(e))
 
+    if limiter is not None:
+        ai_stream_report = limiter.limit("3 per minute")(ai_stream_report)
+
     # ── Freeform AI chat (streaming) ──────────────────────────────────────────
 
     @ai_bp.route("/stream/chat", methods=["POST"])
@@ -279,6 +322,9 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         except Exception as e:
             return _err(str(e))
+
+    if limiter is not None:
+        ai_stream_chat = limiter.limit("3 per minute")(ai_stream_chat)
 
     app.register_blueprint(ai_bp)
     print("[AI] Routes registered — /api/ai/*")

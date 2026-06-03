@@ -45,9 +45,12 @@ _BUILTIN_PATTERNS = [
 ]
 
 _custom_pattern_cache: dict = {}
+_MAX_CUSTOM_PATTERN_LEN = 200
 
 
 def _get_custom_pattern(custom_re: str):
+    if len(custom_re) > _MAX_CUSTOM_PATTERN_LEN:
+        return None
     if custom_re not in _custom_pattern_cache:
         try:
             _custom_pattern_cache[custom_re] = re.compile(custom_re, re.IGNORECASE)
@@ -212,6 +215,8 @@ def register_ctf_routes(app, load_analysis_fn):
     def ctf_scan_flags():
         data        = load_analysis_fn()
         custom_re   = request.args.get("custom", "").strip()
+        if len(custom_re) > _MAX_CUSTOM_PATTERN_LEN:
+            return jsonify({"error": "custom regex is too long"}), 400
         filter_type = request.args.get("artifact_type", "").strip().lower()
 
         all_fields = _artifact_fields(data)
@@ -240,7 +245,10 @@ def register_ctf_routes(app, load_analysis_fn):
     def ctf_decode():
         data        = load_analysis_fn()
         filter_type = request.args.get("artifact_type", "").strip().lower()
-        min_len     = max(4, int(request.args.get("min_length", 8) or 8))
+        try:
+            min_len = max(4, min(10_000, int(request.args.get("min_length", 8) or 8)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "min_length must be an integer"}), 400
 
         all_fields = _artifact_fields(data)
         if filter_type:

@@ -34,21 +34,84 @@ function _forceStep() {
 
   // Reset forces
   _gNodes.forEach(n => { n.fx = 0; n.fy = 0; });
+  // Barnes-Hut quadtree approximation for repulsion (O(n log n)).
+  // Simple quadtree storing center-of-mass and total mass (each node mass=1).
+  class Quad {
+    constructor(x1, y1, x2, y2) {
+      this.x1 = x1; this.y1 = y1; this.x2 = x2; this.y2 = y2;
+      this.cx = 0; this.cy = 0; this.mass = 0;
+      this.point = null; this.children = null; // array of 4 quads
+    }
 
-  // Repulsion between all node pairs
-  for (let i = 0; i < _gNodes.length; i++) {
-    for (let j = i + 1; j < _gNodes.length; j++) {
-      const a = _gNodes[i], b = _gNodes[j];
-      const dx = b.x - a.x || 0.01;
-      const dy = b.y - a.y || 0.01;
-      const dist2 = dx * dx + dy * dy;
-      const f = REPEL / Math.max(dist2, 100);
-      const fx = f * dx / Math.sqrt(dist2);
-      const fy = f * dy / Math.sqrt(dist2);
-      a.fx -= fx; a.fy -= fy;
-      b.fx += fx; b.fy += fy;
+    contains(x, y) {
+      return x >= this.x1 && x < this.x2 && y >= this.y1 && y < this.y2;
+    }
+
+    subdivide() {
+      const mx = (this.x1 + this.x2) / 2;
+      const my = (this.y1 + this.y2) / 2;
+      this.children = [
+        new Quad(this.x1, this.y1, mx, my), // NW
+        new Quad(mx,   this.y1, this.x2, my), // NE
+        new Quad(this.x1, my,   mx,   this.y2), // SW
+        new Quad(mx,   my,   this.x2, this.y2), // SE
+      ];
+    }
+
+    insert(p) {
+      // update center of mass
+      const m = this.mass + 1;
+      this.cx = (this.cx * this.mass + p.x) / m;
+      this.cy = (this.cy * this.mass + p.y) / m;
+      this.mass = m;
+
+      if (!this.point && !this.children) {
+        this.point = p; return;
+      }
+
+      if (!this.children) {
+        // subdivide and reinsert existing point
+        this.subdivide();
+        if (this.point) {
+          const old = this.point; this.point = null;
+          for (const c of this.children) if (c.contains(old.x, old.y)) { c.insert(old); break; }
+        }
+      }
+      for (const c of this.children) if (c.contains(p.x, p.y)) { c.insert(p); break; }
     }
   }
+
+  // Build quad covering the layout area (with small padding)
+  const PAD = 1;
+  const root = new Quad(-PAD, -PAD, _gWidth + PAD, _gHeight + PAD);
+  _gNodes.forEach(n => root.insert(n));
+
+  const THETA = 0.55; // Barnes-Hut opening angle
+
+  function applyRepel(node, quad) {
+    if (!quad || quad.mass === 0) return;
+    // If quad is a leaf with the same point, skip
+    if (!quad.children && quad.point === node) return;
+    // distance from node to quad center-of-mass
+    const dx = quad.cx - node.x || 0.01;
+    const dy = quad.cy - node.y || 0.01;
+    const dist2 = dx * dx + dy * dy;
+    const dist = Math.sqrt(dist2);
+
+    const s = Math.max(quad.x2 - quad.x1, quad.y2 - quad.y1);
+    if ((s / dist) < THETA || !quad.children) {
+      // approximate repulsion from this cell
+      const f = REPEL * quad.mass / Math.max(dist2, 100);
+      const fx = f * dx / dist;
+      const fy = f * dy / dist;
+      node.fx -= fx; node.fy -= fy;
+    } else {
+      // recurse into children
+      for (const c of quad.children) applyRepel(node, c);
+    }
+  }
+
+  _gNodes.forEach(n => applyRepel(n, root));
 
   // Attraction along edges
   _gEdges.forEach(e => {

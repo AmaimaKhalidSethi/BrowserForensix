@@ -727,9 +727,25 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
     )
 
     raw = json.dumps(evidence, indent=2, ensure_ascii=False)
-    OUTPUT_FILE.write_text(raw, encoding="utf-8")
+    # Atomic write: write to a sibling temp file then os.replace() into place.
+    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=OUTPUT_FILE.parent,
+        prefix=".evidence_tmp_",
+        suffix=".json",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(raw)
+        os.replace(tmp_path, OUTPUT_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
     # Restrict to owner-read-only: evidence.json contains cookie values and file paths
-    import stat as _stat
     try:
         OUTPUT_FILE.chmod(0o600)
     except Exception:
@@ -759,5 +775,13 @@ if __name__ == "__main__":
             "If omitted, all profiles are discovered and extracted automatically."
         ),
     )
+    parser.add_argument(
+        "--cookie-key",
+        default=None,
+        help=(
+            "Optional raw Chrome cookie AES key as hex for offline/CTF profiles. "
+            "If omitted, the extractor attempts OS key resolution."
+        ),
+    )
     args = parser.parse_args()
-    run(args.browser, args.profile, getattr(args, 'cookie_key', None))
+    run(args.browser, args.profile, args.cookie_key)

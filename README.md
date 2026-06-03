@@ -37,7 +37,7 @@ browserforensix/
 ├── ai_routes.py            ← /api/ai/* Blueprint (optional)
 ├── ctf_routes.py           ← /ctf + /api/ctf/* Blueprint (optional)
 ├── make_ctf_challenge.py   ← generates a practice CTF challenge (optional)
-├── test_browserforensix.py
+├── tests/
 ├── requirements.txt
 ├── .env                    ← OPENROUTER_API_KEY (create manually)
 │
@@ -191,6 +191,7 @@ Auth Token is checked before Tracking, so names like `_ga_token` are classified 
 
 ## localStorage / LevelDB Extraction
 
+
 `leveldb_reader.py` extracts key-value pairs from Chrome's LevelDB storage directories — not SQLite, not covered by any other open-source browser forensics tool without heavy dependencies.
 
 **Zero external dependencies** — pure Python stdlib. Works immediately with no additional installs.
@@ -218,7 +219,7 @@ pip install python-snappy
 
 `decryptor.py` provides AES-256-GCM cookie decryption for Chrome 80+ profiles. Chrome encrypts cookie values using an AES key stored in `Local State`, itself wrapped by the OS credential store.
 
-**This module is provided as a library and is not wired into the extraction pipeline by default.** Integrate it in environments where you have explicit authority over the target profile — acquired evidence, CTF challenges, or your own machine.
+`extract.py` wires this module into Chromium-family extraction when a usable OS key or explicit CTF/offline key is available. Use it only in environments where you have explicit authority over the target profile: acquired evidence, CTF challenges, or your own machine.
 
 ```python
 from decryptor import CookieDecryptor
@@ -385,10 +386,10 @@ If profile directories are non-contiguous (e.g. `Default`, `Profile 1`, `Profile
 ## Running Tests
 
 ```bash
-python test_browserforensix.py
+pytest -q
 ```
 
-52 tests covering risk scoring, anomaly detection, API filters, domain validation, timestamp parsing, and cookie classification. No live server or `evidence.json` required — all tests use an in-memory fixture and the Flask test client.
+The test suite focuses on the forensic logic that is easiest to break during refactors: timestamp conversion, scoring, anomaly detection, domain validation, and selected API filters. It does not require a live browser profile or a running Flask server.
 
 ---
 
@@ -404,7 +405,7 @@ python test_browserforensix.py
 
 ## Known Limitations
 
-- `decryptor.py` is not wired into the extraction pipeline by default — requires manual integration.
+- Chrome 127+ App-Bound Encryption (`v20` cookie values) cannot be decrypted by external tools; older Chromium cookie formats are attempted when the OS key is available.
 - Safari support is a stub — binary plist and binary cookie parsing not implemented.
 - LevelDB Snappy-compressed `.ldb` blocks require `pip install python-snappy`; `.log` files (most recent data) are always parsed without it.
 - Network traffic not analysed — requires packet capture.

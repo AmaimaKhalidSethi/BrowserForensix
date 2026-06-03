@@ -10,6 +10,7 @@
   <button class="bfx-btn outline sm" id="tlBtn7d"  onclick="setTlRange('7d', this)">Last 7d</button>
   <button class="bfx-btn sm"         id="tlBtn30d" onclick="setTlRange('30d', this)">Last 30d</button>
   <button class="bfx-btn outline sm" id="tlBtnAll" onclick="setTlRange('all', this)">All time</button>
+  <button class="bfx-btn outline sm" id="tlExportBtn" style="margin-left:8px;" onclick="exportTimelineCsv()">Export Timeline CSV</button>
 
   <span class="bfx-filter-label" style="margin-left:12px;">Types:</span>
   <label style="font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -221,7 +222,7 @@
 
   // ── Range buttons ──────────────────────────────────────────────────────────
   function setTlRange(range, btn) {
-    tlRange = range;
+    setPageState('timeline','range', range);
     document.querySelectorAll('[id^="tlBtn"]').forEach(b => {
       b.className = b === btn ? 'bfx-btn sm' : 'bfx-btn outline sm';
     });
@@ -255,7 +256,7 @@
     if (document.getElementById('tlTypeDownloads')?.checked) types.push('downloads');
 
     const ranges   = { '24h': 1, '7d': 7, '30d': 30, 'all': 0 };
-    const days     = ranges[tlRange] || 30;
+    const days     = ranges[pageState.timeline.range] || 30;
     let fromParam  = '';
     if (days > 0) {
       const d = new Date();
@@ -339,5 +340,44 @@
 
   // Initial load
   fetchAndRenderTimeline();
+
+  function exportTimelineCsv() {
+    if (!_tlLastData || !_tlLastData.sessions) return;
+    const rows = [['timestamp','type','domain','title_or_filename','risk_score']];
+    _tlLastData.sessions.forEach(s => {
+      (s.events || []).forEach(e => {
+        const ts = e.time || '';
+        const type = e.type || '';
+        const domain = e.domain || e.host || '';
+        const name = e.title || e.filename || '';
+        const score = e.risk_score || 0;
+        rows.push([ts, type, domain, name, String(score)]);
+      });
+    });
+    const csv = rows.map(r => r.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `browserforensix-timeline-${Date.now()}.csv`;
+    a.click();
+  }
+
+  // ── Lane view resize observer (debounced) ─────────────────────────────────
+  (function() {
+    const el = document.getElementById('tlLaneView');
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let lastW = el.getBoundingClientRect().width || el.offsetWidth || 0;
+    let timeout = null;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width || el.getBoundingClientRect().width || 0;
+      if (Math.abs(w - lastW) <= 20) return;
+      lastW = w;
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        if (_tlLastData && _tlView === 'lane') renderLaneView(_tlLastData);
+      }, 200);
+    });
+    try { ro.observe(el); } catch (e) { /* ignore */ }
+  })();
 </script>
 {% endblock %}

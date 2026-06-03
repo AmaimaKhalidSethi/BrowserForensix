@@ -80,7 +80,8 @@ function esc(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function noDataBanner(msg) {
@@ -541,22 +542,55 @@ document.addEventListener('keydown', e => {
 });
 
 // ── History ───────────────────────────────────────────────────────────────────
+// Consolidated page state persisted to sessionStorage so filter selections
+// survive soft navigation. Keys: 'history', 'cookies', 'downloads', 'timeline'.
+const PAGE_STATE_KEY = 'bfx-page-state';
+let pageState = {
+  history:   { page: 1, q: '', profile: '', protocol: 'all', risk: 'any', from: '', to: '' },
+  cookies:   { page: 1, profile: '', type: 'all', expired: 'all', secure: 'all', host: '' },
+  downloads: { page: 1, profile: '', q: '', risk: 'any' },
+  timeline:  { range: '30d' },
+  localstorage: { page: 1, profile: '', q: '', per_page: 50 },
+};
 
-let histState = { page: 1, q: '', profile: '', protocol: 'all', risk: 'any', from: '', to: '' };
+function _loadPageState() {
+  try {
+    const s = sessionStorage.getItem(PAGE_STATE_KEY);
+    if (!s) return;
+    const parsed = JSON.parse(s);
+    if (parsed && typeof parsed === 'object') {
+      pageState = Object.assign(pageState, parsed);
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function _savePageState() {
+  try { sessionStorage.setItem(PAGE_STATE_KEY, JSON.stringify(pageState)); } catch (_) {}
+}
+
+// Public helper: update a key on a page's state and persist.
+function setPageState(page, key, value) {
+  if (!pageState[page]) pageState[page] = {};
+  pageState[page][key] = value;
+  _savePageState();
+}
+
+// Initialize from sessionStorage
+_loadPageState();
 let histExpandedRow = null;
 
 async function loadHistory(reset = false) {
-  if (reset) { histState.page = 1; histExpandedRow = null; }
+  if (reset) { pageState.history.page = 1; histExpandedRow = null; }
   // B8 FIX: wire profile filter
-  buildProfileFilter('histFilterBar', val => { histState.profile = val; loadHistory(true); });
+  buildProfileFilter('histFilterBar', val => { setPageState('history','profile', val); loadHistory(true); });
   const params = new URLSearchParams({
-    page:     histState.page,
-    q:        histState.q,
-    profile:  histState.profile || '',
-    protocol: histState.protocol,
-    risk:     histState.risk,
-    from:     histState.from,
-    to:       histState.to,
+    page:     pageState.history.page,
+    q:        pageState.history.q,
+    profile:  pageState.history.profile || '',
+    protocol: pageState.history.protocol,
+    risk:     pageState.history.risk,
+    from:     pageState.history.from,
+    to:       pageState.history.to,
   });
   const data = await API.get(`/api/history?${params}`);
   const tbody = document.getElementById('histBody');
@@ -588,10 +622,8 @@ async function loadHistory(reset = false) {
     });
   }
 
-  document.getElementById('histPageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('histTotal').textContent    = `${data.total.toLocaleString()} total entries`;
-  document.getElementById('histPrev').disabled = data.page <= 1;
-  document.getElementById('histNext').disabled = data.page >= data.total_pages;
+  // Let paginator update the controls (created below)
+  if (window.histPaginator && typeof window.histPaginator.update === 'function') window.histPaginator.update(data);
 }
 
 function toggleHistExpand(row, h) {
@@ -630,20 +662,18 @@ function toggleHistExpand(row, h) {
 
 // ── Cookies ───────────────────────────────────────────────────────────────────
 
-// FIX-COOKIES-HOST + FIX-COOKIES-SECURE:
-// cookieState now tracks host and secure; both are sent as API params.
-let cookieState = { page: 1, profile: '', type: 'all', expired: 'all', secure: 'all', host: '' };
+// Cookies use pageState.cookies; templates interact via `setPageState('cookies', ...)`.
 
 async function loadCookies(reset = false) {
-  if (reset) cookieState.page = 1;
-  buildProfileFilter('cookieFilterBar', val => { cookieState.profile = val; loadCookies(true); });
+  if (reset) pageState.cookies.page = 1;
+  buildProfileFilter('cookieFilterBar', val => { setPageState('cookies','profile', val); loadCookies(true); });
   const params = new URLSearchParams({
-    page:    cookieState.page,
-    profile: cookieState.profile || '',
-    type:    cookieState.type,
-    expired: cookieState.expired,
-    secure:  cookieState.secure,
-    host:    cookieState.host,
+    page:    pageState.cookies.page,
+    profile: pageState.cookies.profile || '',
+    type:    pageState.cookies.type,
+    expired: pageState.cookies.expired,
+    secure:  pageState.cookies.secure,
+    host:    pageState.cookies.host,
   });
   const data = await API.get(`/api/cookies?${params}`);
   const tbody = document.getElementById('cookieBody');
@@ -684,10 +714,7 @@ async function loadCookies(reset = false) {
     tbody.appendChild(row);
   });
 
-  document.getElementById('cookiePageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('cookieTotal').textContent    = `${data.total.toLocaleString()} total cookies`;
-  document.getElementById('cookiePrev').disabled = data.page <= 1;
-  document.getElementById('cookieNext').disabled = data.page >= data.total_pages;
+  if (window.cookiePaginator && typeof window.cookiePaginator.update === 'function') window.cookiePaginator.update(data);
 }
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
@@ -744,12 +771,11 @@ function renderBookmarkFolder(folder) {
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
 
-let dlState = { page: 1, profile: '', q: '', risk: 'any' };
-
+// Downloads use pageState.downloads
 async function loadDownloads(reset = false) {
-  if (reset) dlState.page = 1;
-  buildProfileFilter('dlFilterBar', val => { dlState.profile = val; loadDownloads(true); });
-  const params = new URLSearchParams({ page: dlState.page, profile: dlState.profile || '', q: dlState.q, risk: dlState.risk });
+  if (reset) pageState.downloads.page = 1;
+  buildProfileFilter('dlFilterBar', val => { setPageState('downloads','profile', val); loadDownloads(true); });
+  const params = new URLSearchParams({ page: pageState.downloads.page, profile: pageState.downloads.profile || '', q: pageState.downloads.q, risk: pageState.downloads.risk });
   const data = await API.get(`/api/downloads?${params}`);
   const tbody = document.getElementById('dlBody');
   if (!tbody) return;
@@ -795,19 +821,61 @@ async function loadDownloads(reset = false) {
     }
   });
 
-  document.getElementById('dlPageInfo').textContent = `Page ${data.page} of ${data.total_pages}`;
-  document.getElementById('dlTotal').textContent    = `${data.total.toLocaleString()} total downloads`;
-  document.getElementById('dlPrev').disabled = data.page <= 1;
-  document.getElementById('dlNext').disabled = data.page >= data.total_pages;
+  if (window.dlPaginator && typeof window.dlPaginator.update === 'function') window.dlPaginator.update(data);
 }
+
+// ── Paginator class (shared) ───────────────────────────────────────────────
+class Paginator {
+  constructor(prefix, fetchFn, stateObj) {
+    this.prefix = prefix; // e.g. 'hist' => 'histPrev','histNext','histPageInfo','histTotal'
+    this.fetchFn = fetchFn;
+    this.state = stateObj;
+    this.totalPages = null;
+    this.elemPrev = document.getElementById(prefix + 'Prev');
+    this.elemNext = document.getElementById(prefix + 'Next');
+    this.elemInfo = document.getElementById(prefix + 'PageInfo');
+    this.elemTotal = document.getElementById(prefix + 'Total');
+    if (this.elemPrev) this.elemPrev.addEventListener('click', () => this.page(-1));
+    if (this.elemNext) this.elemNext.addEventListener('click', () => this.page(1));
+  }
+
+  page(dir) {
+    const cur = Math.max(1, Number(this.state.page || 1));
+    let next = Math.max(1, cur + dir);
+    if (this.totalPages) next = Math.min(next, this.totalPages);
+    this.state.page = next;
+    try { _savePageState(); } catch (_) {}
+    // allow fetchFn to refresh and call update()
+    try { this.fetchFn(); } catch (e) { console.error('Paginator fetch error', e); }
+  }
+
+  // Called by fetch functions with the API response data
+  update(data) {
+    if (!data) return;
+    this.totalPages = data.total_pages || 1;
+    this.state.page = data.page || 1;
+    if (this.elemInfo) this.elemInfo.textContent = `Page ${data.page} of ${this.totalPages}`;
+    if (this.elemTotal) this.elemTotal.textContent = data.total ? `${data.total.toLocaleString()} total` : '';
+    if (this.elemPrev) this.elemPrev.disabled = data.page <= 1;
+    if (this.elemNext) this.elemNext.disabled = data.page >= this.totalPages;
+  }
+}
+
+// Instantiate paginators (globals for template compatibility)
+window.histPaginator = new Paginator('hist', loadHistory, pageState.history);
+window.cookiePaginator = new Paginator('cookie', loadCookies, pageState.cookies);
+window.dlPaginator   = new Paginator('dl', loadDownloads, pageState.downloads);
+
+// Backwards-compatible global page functions (templates call these)
+window.histPage = function(dir) { window.histPaginator?.page(dir); };
+window.cookiePage = function(dir) { window.cookiePaginator?.page(dir); };
+window.dlPage = function(dir) { window.dlPaginator?.page(dir); };
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
-let tlRange = '30d';
-
 async function loadTimeline() {
   const ranges = { '24h': 1, '7d': 7, '30d': 30, 'all': 0 };
-  const days = ranges[tlRange] || 30;
+  const days = ranges[pageState.timeline.range] || 30;
   let fromParam = '';
   if (days > 0) {
     const d = new Date();
@@ -929,21 +997,36 @@ async function loadSessionViewer() {
 }
 
 async function loadGapDetector() {
-  const data = await API.get('/api/overview');
   const elGap = document.getElementById('gapDetectorContent');
-  if (!elGap || !data) return;
+  if (!elGap) return;
 
-  const gapAnomaly = (data.anomalies || []).find(a => a.type === 'history_gap');
-  if (!gapAnomaly) {
+  // Fetch ghost domains (cookies with no matching history)
+  const data = await API.get('/api/ghost_domains');
+  if (!data || !data.ghosts || !data.ghosts.length) {
     elGap.innerHTML = '<div class="muted" style="font-size:12px;">No history gaps detected.</div>';
     return;
   }
 
-  elGap.innerHTML = `
-    <div style="font-size:13px;font-weight:bold;color:var(--text-primary);margin-bottom:8px;">
-      ${gapAnomaly.domain_count} domain(s) with no history
-    </div>
-    <div class="muted" style="font-size:11px;margin-top:8px;">${esc(gapAnomaly.description)}</div>`;
+  const ghosts = data.ghosts;
+  let html = `<div style="font-size:13px;font-weight:bold;color:var(--text-primary);margin-bottom:8px;">${ghosts.length} domain(s) with no history</div>`;
+  ghosts.forEach(g => {
+    const id = 'ghost_' + encodeURIComponent(g.domain);
+    const cookieList = (g.cookies || []).map(c => `<div style="font-size:12px;padding:4px 0;">${esc(c.name || '')} <span class="mono muted" style="font-size:11px;margin-left:8px;">${esc(c.created || '')}</span></div>`).join('');
+    html += `<div style="border:1px solid var(--border);background:var(--bg-surface);padding:8px;border-radius:6px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div style="font-weight:bold;flex:1;">${esc(g.domain)}</div>
+        <button class="bfx-btn outline sm" onclick="document.getElementById('${id}').classList.toggle('open')">Details</button>
+        <button class="bfx-btn sm" onclick="(function(){document.getElementById('domainInspectInput').value='${esc(g.domain)}';inspectDomain(); document.getElementById('domainInspectInput').scrollIntoView({behavior:'smooth',block:'nearest'});})()">Inspect</button>
+      </div>
+      <div id="${id}" class="muted" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">${cookieList}</div>
+    </div>`;
+  });
+  elGap.innerHTML = html;
+  // Wire toggles (simple: toggle .open -> display block)
+  document.querySelectorAll('[id^="ghost_"]').forEach(el => {
+    const btn = document.querySelector(`button[onclick*="${el.id}"]`);
+    if (btn) btn.addEventListener('click', () => { el.style.display = el.classList.toggle('open') ? '' : 'none'; });
+  });
 }
 
 // ── Report ────────────────────────────────────────────────────────────────────

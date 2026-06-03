@@ -89,14 +89,14 @@
 
   ['cookieTypeFilter', 'cookieExpiredFilter'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', () => {
-      cookieState.type    = document.getElementById('cookieTypeFilter').value;
-      cookieState.expired = document.getElementById('cookieExpiredFilter').value;
+      setPageState('cookies','type', document.getElementById('cookieTypeFilter').value);
+      setPageState('cookies','expired', document.getElementById('cookieExpiredFilter').value);
       loadCookies(true);
     });
   });
 
   document.getElementById('cookieSecureFilter')?.addEventListener('change', e => {
-    cookieState.secure = e.target.value;   // FIX-COOKIES-SECURE: was never set
+    setPageState('cookies','secure', e.target.value);   // FIX-COOKIES-SECURE: was never set
     loadCookies(true);
   });
 
@@ -104,15 +104,10 @@
   document.getElementById('cookieHostSearch')?.addEventListener('input', e => {
     clearTimeout(cookieHostDebounce);
     cookieHostDebounce = setTimeout(() => {
-      cookieState.host = e.target.value.trim();  // FIX-COOKIES-HOST: was never set
+      setPageState('cookies','host', e.target.value.trim());  // FIX-COOKIES-HOST: was never set
       loadCookies(true);
     }, 280);
   });
-
-  function cookiePage(dir) {
-    cookieState.page = Math.max(1, cookieState.page + dir);
-    loadCookies();
-  }
 
   loadCookies();
 </script>

@@ -18,3 +18,7 @@ cryptography>=41.0.0        # preferred — maintained by PyCA
 # ai_engine.py uses only stdlib urllib — no extra packages needed.
 # Set OPENROUTER_API_KEY in .env to enable AI features.
 python-dotenv>=1.0.0        # loads .env automatically on serve.py startup
+flask-limiter>=2.0.0       # rate limiting for AI routes
+
+# Development / verification
+pytest>=8.0.0              # test suite for forensic logic and route filters
