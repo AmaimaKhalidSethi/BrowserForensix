@@ -1,6 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-BrowserForensix â€” analyzer.py
+BrowserForensix — analyzer.py
 Scores and annotates all browser artifacts, writes analysis.json.
 
 FIX-10: analysis.json is now written atomically via a temp file + os.replace().
@@ -38,7 +38,7 @@ EVIDENCE_FILE = DATA_DIR / "evidence.json"
 ANALYSIS_FILE = DATA_DIR / "analysis.json"
 
 
-# â”€â”€ Datetime helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Datetime helpers ──────────────────────────────────────────────────────────
 
 def _now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
@@ -50,11 +50,11 @@ def _now_utc() -> datetime:
 
 # Anomaly detection lives in analysis/anomalies.py.
 
-# â”€â”€ Heatmap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Heatmap ───────────────────────────────────────────────────────────────────
 
 # Heatmap generation lives in analysis/heatmap.py.
 
-# â”€â”€ Main pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def run() -> None:
     if not EVIDENCE_FILE.exists():
@@ -136,6 +136,7 @@ def run() -> None:
         + [c["risk_score"] for c in scored_cookies]
         + [d["risk_score"] for d in scored_downloads]
     )
+    moderate  = sum(1 for s in all_scores if 31 <= s <= 60)
     flagged   = sum(1 for s in all_scores if s >= 61)
     avg_score = round(statistics.mean(all_scores), 1) if all_scores else 0.0
 
@@ -166,6 +167,7 @@ def run() -> None:
             "bookmark_count":     len(bookmarks),
             "download_count":     len(scored_downloads),
             "flagged_count":      flagged,
+            "moderate_count":     moderate,
             "average_risk_score": avg_score,
             "anomaly_count":      len(anomalies),
         },
@@ -179,9 +181,10 @@ def run() -> None:
         "cookies":   scored_cookies,
         "bookmarks": bookmarks,
         "downloads": scored_downloads,
+        "local_storage": evidence.get("local_storage", []),
     }
 
-    # FIX-10: Atomic write â€” write to a sibling temp file then os.replace() into place.
+    # FIX-10: Atomic write — write to a sibling temp file then os.replace() into place.
     # This guarantees load_analysis() always reads a complete, valid JSON file even
     # if a server request arrives mid-write. os.replace() is atomic on POSIX and on
     # Windows when src and dst are on the same volume (same DATA_DIR).
@@ -208,7 +211,7 @@ def run() -> None:
     except Exception:
         pass
 
-    print(f"[OK] Analysis complete. {len(anomalies)} anomalies, {flagged} flagged items â†’ {ANALYSIS_FILE}")
+    print(f"[OK] Analysis complete. {len(anomalies)} anomalies, {flagged} flagged items → {ANALYSIS_FILE}")
 
 
 if __name__ == "__main__":

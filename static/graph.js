@@ -8,6 +8,8 @@
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let _gNodes = [], _gEdges = [], _gSim = null, _gSvg = null;
+let _gEdgeMap = {};
+let _gNodeMap = {};
 let _gDragging = null, _gTransform = { x: 0, y: 0, k: 1 };
 let _gWidth = 0, _gHeight = 0;
 
@@ -157,10 +159,10 @@ function _gRender() {
 
   // Update edge lines
   _gSvg.querySelectorAll('.g-edge').forEach(el => {
-    const e = _gEdges.find(ed => el.dataset.id === `${ed.source}__${ed.target}__${ed.type}`);
+    const e = _gEdgeMap[el.dataset.id];
     if (!e) return;
-    const a = _gNodes.find(n => n.id === e.source);
-    const b = _gNodes.find(n => n.id === e.target);
+    const a = _gNodeMap[e.source];
+    const b = _gNodeMap[e.target];
     if (!a || !b) return;
     el.setAttribute('x1', a.x); el.setAttribute('y1', a.y);
     el.setAttribute('x2', b.x); el.setAttribute('y2', b.y);
@@ -168,7 +170,7 @@ function _gRender() {
 
   // Update node positions
   _gSvg.querySelectorAll('.g-node-group').forEach(g => {
-    const n = _gNodes.find(nd => nd.id === g.dataset.id);
+    const n = _gNodeMap[g.dataset.id];
     if (!n) return;
     g.setAttribute('transform', `translate(${n.x},${n.y})`);
   });
@@ -305,6 +307,14 @@ function _gBuild() {
     nodeG.appendChild(g);
   });
   _gSvg.appendChild(nodeG);
+
+  // Build fast lookup maps for render/update loops
+  _gEdgeMap = {};
+  _gEdges.forEach(e => {
+    _gEdgeMap[`${e.source}__${e.target}__${e.type}`] = e;
+  });
+  _gNodeMap = {};
+  _gNodes.forEach(n => { _gNodeMap[n.id] = n; });
 
   // Tooltip overlay
   const tooltip = document.createElementNS(ns, 'g');
@@ -516,4 +526,5 @@ function resetGraphLayout() {
     n.vx = 0; n.vy = 0;
   });
   _gTick = 0;
+  if (!_gAnimFrame) _gLoop();
 }

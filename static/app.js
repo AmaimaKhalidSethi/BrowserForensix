@@ -533,6 +533,12 @@ window.toggleTheme = function() {
   if (typeof _origToggleTheme === 'function') _origToggleTheme();
   if (_heatmapData && document.getElementById('activityHeatmap')) {
     renderHeatmap(_heatmapData);
+    // Update legend swatches to match the new theme's color stops
+    const stops = _heatmapStops();
+    document.querySelectorAll('.bfx-heatmap-swatch').forEach((el, i) => {
+      el.style.background = stops[i] || '';
+      el.style.border = i === 0 ? `1px solid ${stops[1]}` : '';
+    });
   }
 };
 

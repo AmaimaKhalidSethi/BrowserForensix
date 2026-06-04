@@ -121,11 +121,11 @@
           <div class="bfx-heatmap-legend">
             <span>Low</span>
             <div class="bfx-heatmap-legend-swatches">
-              <span class="bfx-heatmap-swatch" style="background:#13102A;border:1px solid #2D1B69;"></span>
-              <span class="bfx-heatmap-swatch" style="background:#2D1B69;"></span>
-              <span class="bfx-heatmap-swatch" style="background:#5B21B6;"></span>
-              <span class="bfx-heatmap-swatch" style="background:#8B45F5;"></span>
-              <span class="bfx-heatmap-swatch" style="background:#C084FC;"></span>
+              <span class="bfx-heatmap-swatch bfx-heatmap-swatch-0"></span>
+              <span class="bfx-heatmap-swatch bfx-heatmap-swatch-1"></span>
+              <span class="bfx-heatmap-swatch bfx-heatmap-swatch-2"></span>
+              <span class="bfx-heatmap-swatch bfx-heatmap-swatch-3"></span>
+              <span class="bfx-heatmap-swatch bfx-heatmap-swatch-4"></span>
             </div>
             <span>High</span>
           </div>
@@ -283,7 +283,6 @@ function showAllAnomalies() {
 }
 
 // ── Override evidenceMeta rendering ──────────────────────────────────────────
-window._origLoadOverview = window.loadOverview;
 window.loadOverview = async function() {
   const data = await API.get('/api/overview');
   if (!data) { document.getElementById('overviewContent').innerHTML = '<div class="bfx-loading muted">Could not load overview data.</div>'; return; }
@@ -305,6 +304,12 @@ window.loadOverview = async function() {
   renderAnomalies(data.anomalies || []);
   renderDomainList(data.top_domains || []);
   renderHeatmap(data.heatmap || []);
+  // Update legend swatches to match the current theme's heatmap color stops
+  const stops = _heatmapStops();
+  document.querySelectorAll('.bfx-heatmap-swatch').forEach((el, i) => {
+    el.style.background = stops[i] || '';
+    el.style.border = i === 0 ? `1px solid ${stops[1]}` : '';
+  });
   renderRiskChart(data.summary || {});
   renderDomainsChart(data.top_domains || []);
 
@@ -393,7 +398,7 @@ function renderDomainsChart(domains) {
   }
 
   const top    = domains.slice(0, 8);
-  const maxVal = Math.max(...top.map(d => d.visit_count || 0), 1);
+  const maxVal = Math.max(...top.map(d => d.visits || 0), 1);
   const W      = el.offsetWidth || 260;
   const BAR_H  = 18;
   const GAP    = 5;
@@ -425,7 +430,7 @@ function renderDomainsChart(domains) {
     // Visit count
     html += `<text x="${LABEL_W + (W - LABEL_W - 40) + 5}" y="${y + BAR_H - 5}"
               font-size="10" fill="${color}" font-weight="bold"
-              font-family="Courier New,monospace">${(d.visit_count || 0).toLocaleString()}</text>`;
+              font-family="Courier New,monospace">${(d.visits || 0).toLocaleString()}</text>`;
   });
 
   html += '</svg>';

@@ -91,6 +91,10 @@
     </button>
 
     <div class="bfx-ai-sidebar-title" style="margin-top:16px;">Generate Report</div>
+    <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+      <input type="text" id="rptCase" placeholder="Case #" style="flex:1; padding:4px 6px; font-size:11px; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); border-radius:4px;">
+      <input type="text" id="rptExaminer" placeholder="Examiner" style="flex:1; padding:4px 6px; font-size:11px; background:var(--bg-panel); color:var(--text-primary); border:1px solid var(--border); border-radius:4px;">
+    </div>
     <button class="bfx-ai-quick-btn" onclick="aiNarrativeReport()">
       <span class="bfx-ai-quick-icon">◑</span>
       <div>
@@ -223,10 +227,12 @@
   }
 
   async function aiNarrativeReport() {
-    if (aiStreaming) return; 
-    const case_n = prompt('Case number (optional):') || '';
-    const examiner = prompt('Examiner name (optional):') || '';
-    const date = new Date().toISOString().slice(0,10);
+    if (aiStreaming) return;
+    // read from the existing report page inputs if present, else empty string
+    const case_n   = document.getElementById('rptCase')?.value     || '';
+    const examiner = document.getElementById('rptExaminer')?.value || '';
+    const date     = document.getElementById('rptDate')?.value     ||
+                     new Date().toISOString().slice(0, 10);
 
     aiAddMessage('user', 'Generate a full AI narrative forensic report for this profile.');
     aiHistory.push({ role: 'user', content: 'Generate AI narrative report.' });

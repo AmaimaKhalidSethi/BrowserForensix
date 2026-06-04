@@ -34,6 +34,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from leveldb_reader import read_all_storage as _read_storage
+    _LEVELDB_OK = True
+except ImportError:
+    _LEVELDB_OK = False
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
@@ -613,6 +619,7 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
         "cookies": [],
         "bookmarks": [],
         "downloads": [],
+        "local_storage": [],
     }
 
     # ── Cookie decryptor (v10/v11 — Chrome <127, macOS, Linux, CTF profiles) ──
@@ -673,6 +680,16 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
             evidence["cookies"]   += extract_chrome_cookies(profile, label, _cookie_decryptor)
             evidence["bookmarks"] += extract_chrome_bookmarks(profile, label)
             evidence["downloads"] += extract_chrome_downloads(profile, label)
+            try:
+                from leveldb_reader import read_all_storage as _read_ls
+                ls = _read_ls(profile)
+                for entry in ls:
+                    entry["profile"] = label
+                evidence["local_storage"] += ls
+                log.info(f"{label} localStorage: {len(ls)} entries")
+            except Exception as _e:
+                log.warning(f"{label} localStorage read failed: {_e}")
+
             # NOTE: History DB is copied once inside each extractor. Both history
             # and downloads extractors copy it independently for snapshot consistency.
             # If disk I/O is a concern use --profile to extract a single profile.
@@ -778,9 +795,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cookie-key",
         default=None,
+        dest="cookie_key",
+        metavar="HEX",
         help=(
-            "Optional raw Chrome cookie AES key as hex for offline/CTF profiles. "
-            "If omitted, the extractor attempts OS key resolution."
+            "32-byte AES key as 64 hex chars for offline/CTF cookie decryption. "
+            "Bypasses OS keychain entirely."
         ),
     )
     args = parser.parse_args()

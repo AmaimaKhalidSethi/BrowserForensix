@@ -34,14 +34,18 @@ APP_NAME        = "BrowserForensix"
 # FIX-9: was absent — urlopen blocked indefinitely on hung connections.
 _REQUEST_TIMEOUT = 60
 
-# Load .env if present
-_env_path = Path(__file__).parent / ".env"
-if _env_path.exists():
-    for line in _env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+# Load .env if present — prefer python-dotenv if installed, else manual parse
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    _env_path = Path(__file__).parent / ".env"
+    if _env_path.exists():
+        for line in _env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
 
 
 def _api_key() -> str:

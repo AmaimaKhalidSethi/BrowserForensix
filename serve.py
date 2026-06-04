@@ -1,6 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-BrowserForensix â€” serve.py
+BrowserForensix — serve.py
 Runs analyzer, starts Flask server, opens browser automatically.
 
 FIXES IN THIS FILE:
@@ -49,7 +49,7 @@ try:
     _AI_AVAILABLE = True
 except ImportError:
     _AI_AVAILABLE = False
-    print("[WARN] ai_routes.py not found â€” AI features disabled")
+    print("[WARN] ai_routes.py not found — AI features disabled")
 
 try:
     from data_routes import register_data_routes
@@ -94,7 +94,7 @@ def _set_csp(response):
     response.headers['Content-Security-Policy'] = csp
     return response
 
-# â”€â”€ Analysis cache (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Analysis cache (thread-safe) ──────────────────────────────────────────────
 
 
 class AnalysisCache:
@@ -159,7 +159,7 @@ def _set_reanalysis_pending(val: bool) -> None:
         _reanalysis_pending = bool(val)
 
 
-# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def paginate(items: list, page: int, per_page: int = 50) -> dict:
     total       = len(items)
@@ -205,17 +205,32 @@ def _is_valid_domain(domain: str) -> bool:
 def _validate_domain_param(raw: str) -> str:
     domain = raw.lower().strip().removeprefix("www.")
     if not domain or len(domain) < 4 or len(domain) > 253:
-        abort(400, description="Invalid domain: must be 4-253 characters.")
+        from flask import make_response
+        resp = make_response(jsonify({"error": "Invalid domain: must be 4-253 characters."}), 400)
+        raise DomainValidationError(resp)
     if not _is_valid_domain(domain):
-        abort(400, description="Invalid domain syntax.")
+        from flask import make_response
+        resp = make_response(jsonify({"error": "Invalid domain syntax."}), 400)
+        raise DomainValidationError(resp)
     return domain
+
+
+class DomainValidationError(Exception):
+    """Raised by _validate_domain_param so callers get a JSON 400 response."""
+    def __init__(self, response):
+        self.response = response
+
+
+@app.errorhandler(DomainValidationError)
+def _handle_domain_error(exc):
+    return exc.response
 
 
 # Domain extraction and timestamp parsing live in analysis/sessions.py.
 
-# â”€â”€ Origin guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Origin guard ──────────────────────────────────────────────────────────────
 # FIX-5: Previous guard returned 403 for any request with a Referer header
-# that wasn't localhost â€” this silently broke BurpSuite, Postman with a
+# that wasn't localhost — this silently broke BurpSuite, Postman with a
 # base URL set, and browser extensions that inject a Referer header.
 # The fixed rule: only block when Origin or Referer is PRESENT and does NOT
 # match localhost. Absent headers = same-origin or tool use = allow.
@@ -233,10 +248,10 @@ def _guard_api_origin():
         abort(403, description="Cross-origin API access denied.")
     if not origin and referer and not _LOCALHOST_RE.match(referer):
         abort(403, description="Cross-origin API access denied.")
-    # No Origin, no Referer â†’ allow unconditionally (curl, Postman, proxies)
+    # No Origin, no Referer → allow unconditionally (curl, Postman, proxies)
 
 
-# â”€â”€ Page routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Page routes ───────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -289,7 +304,7 @@ def ctf_page():
     return render_template("ctf.html", active="ctf")
 
 
-# â”€â”€ API: Status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── API: Status ───────────────────────────────────────────────────────────────
 
 @app.route("/api/status")
 def api_status():
@@ -314,7 +329,7 @@ def api_status():
     })
 
 
-# â”€â”€ API: Profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── API: Profiles ─────────────────────────────────────────────────────────────
 
 @app.route("/api/profiles")
 def api_profiles():
@@ -344,7 +359,7 @@ def api_profiles():
     return jsonify({"profiles": profiles, "count": len(profiles)})
 
 
-# â”€â”€ API: Overview â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── API: Overview ─────────────────────────────────────────────────────────────
 
 @app.route("/api/overview")
 def api_overview():
@@ -389,7 +404,7 @@ def api_overview():
 # Search API moved to data_routes.py blueprint
 
 
-# â”€â”€ API: Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── API: Report ───────────────────────────────────────────────────────────────
 
 @app.route("/api/report")
 def api_report():
@@ -499,49 +514,24 @@ def api_diff():
 
 @app.route('/api/localstorage')
 def api_localstorage():
-    """Return localStorage/sessionStorage entries for each extracted profile.
+    data  = analysis_cache.get()
+    items = data.get("local_storage", [])
+    q      = request.args.get("q",      "").lower()
+    origin = request.args.get("origin", "").strip().lower()
+    source = request.args.get("source", "").strip()
+    page   = _safe_int(request.args.get("page", 1))
+    per    = _safe_int(request.args.get("per_page", 50))
 
-    Uses leveldb_reader.read_all_storage(profile_path) when available.
-    """
-    if not _LDB_AVAILABLE:
-        return jsonify({'error': 'LevelDB reader unavailable'}), 501
-    data = analysis_cache.get()
-    profiles = data.get('meta', {}).get('profiles_extracted', [])
-    out = []
-    for p in profiles:
-        path = p.get('path') or p.get('dir')
-        if not path:
-            continue
-        profile_path = Path(path)
-        if not profile_path.is_absolute():
-            profile_path = BASE_DIR / profile_path
-        if not profile_path.exists():
-            continue
-        try:
-            entries = leveldb_reader.read_all_storage(profile_path)
-        except Exception as e:
-            entries = []
-        out.extend(entries)
+    if q:
+        items = [i for i in items if q in i.get("key",   "").lower()
+                 or q in i.get("value", "").lower()
+                 or q in i.get("origin","").lower()]
+    if origin:
+        items = [i for i in items if origin in i.get("origin", "").lower()]
+    if source:
+        items = [i for i in items if i.get("source", "") == source]
 
-    # Flag sensitive values that parse as JSON and contain sensitive keys
-    sensitive_keys = {'token', 'auth', 'password', 'key'}
-    for e in out:
-        e['sensitive'] = False
-        try:
-            v = json.loads(e.get('value',''))
-            if isinstance(v, dict) and any(k.lower() in sensitive_keys for k in v.keys()):
-                e['sensitive'] = True
-        except Exception:
-            # Not JSON â€” do a simple substring check
-            val = (e.get('value') or '').lower()
-            if any(sk in val for sk in sensitive_keys):
-                e['sensitive'] = True
-
-    # Simple pagination via query params
-    page = _safe_int(request.args.get('page', 1), default=1)
-    per = _safe_int(request.args.get('per_page', 50), default=50)
-    paged = paginate(out, page, per)
-    return jsonify(paged)
+    return jsonify(paginate(items, page, per))
 
 
 @app.route('/api/ghost_domains')
@@ -573,7 +563,7 @@ def api_ghost_domains():
 # Graph API moved to data_routes.py blueprint
 
 
-# â”€â”€ Startup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Startup ───────────────────────────────────────────────────────────────────
 
 def startup():
     print("\n=== BrowserForensix ===")
@@ -581,7 +571,7 @@ def startup():
         print(f"[WARN] No evidence.json at {EVIDENCE_FILE}")
         print("       Run: python extract.py --browser chrome\n")
     else:
-        print("[INFO] Running analyzerâ€¦")
+        print("[INFO] Running analyzer…")
         try:
             analyzer.run()
         except Exception as e:
@@ -590,7 +580,7 @@ def startup():
     if _AI_AVAILABLE:
         # FIX-4: Pass helpers dict so ai_routes.py never needs to import from serve.
         # Previously ai_routes imported domain_of, _norm_dt, etc. from serve at
-        # request time â€” a circular import that worked by accident and will break
+        # request time — a circular import that worked by accident and will break
         # on any import-order change.
         helpers = {
             "domain_of":              domain_of,
@@ -600,7 +590,7 @@ def startup():
         }
         register_ai_routes(app, analysis_cache.get, helpers)
     else:
-        print("[INFO] AI features not available â€” add ai_engine.py and ai_routes.py")
+        print("[INFO] AI features not available — add ai_engine.py and ai_routes.py")
 
     # Register data routes blueprint (history, cookies, downloads, timeline, domain, sessions, search, graph)
     if _DATA_AVAILABLE:
@@ -616,7 +606,7 @@ def startup():
         }
         register_data_routes(app, analysis_cache.get, helpers)
     else:
-        print("[INFO] data_routes.py not available â€” data APIs remain in serve.py")
+        print("[INFO] data_routes.py not available — data APIs remain in serve.py")
 
     if _CTF_AVAILABLE:
         register_ctf_routes(app, analysis_cache.get)
@@ -641,7 +631,7 @@ def startup():
                         last_mtime = m
                         _set_reanalysis_pending(True)
                         try:
-                            print("[INFO] evidence.json changed â€” running analyzer")
+                            print("[INFO] evidence.json changed — running analyzer")
                             analyzer.run()
                             analysis_cache.invalidate()
                         except Exception as e:

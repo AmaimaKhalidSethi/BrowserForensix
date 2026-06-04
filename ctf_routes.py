@@ -123,6 +123,17 @@ def _artifact_fields(data: dict) -> list:
                 fields.append({"artifact_type": "bookmark", "field": f,
                                 "value": v, "artifact": b})
 
+    for ls in data.get("local_storage", []):
+        for f in ("key", "value"):
+            v = ls.get(f, "")
+            if v:
+                fields.append({
+                    "artifact_type": "localstorage",
+                    "field": f,
+                    "value": str(v),
+                    "artifact": ls,
+                })
+
     return fields
 
 
@@ -199,6 +210,13 @@ def _summarise_artifact(a: dict, atype: str) -> dict:
             "label":      a.get("title", ""),
             "title":      a.get("url", ""),
             "time":       a.get("date_added", ""),
+            "risk_score": 0,
+        }
+    if atype == "localstorage":
+        return {
+            "label":      a.get("key", ""),
+            "title":      a.get("origin", ""),
+            "time":       "",
             "risk_score": 0,
         }
     return {"label": str(a), "title": "", "time": "", "risk_score": 0}
