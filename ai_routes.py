@@ -151,6 +151,10 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
                 domain = validate_domain_param(domain)
             else:
                 domain = domain.lower().strip().removeprefix("www.")
+        except ValueError as e:
+            return _err(str(e))
+        
+        try:
             data      = load_analysis_fn()
             history   = [h for h in data.get("history",   []) if _matches_domain(domain_of(h.get("url", "")), domain)]
             cookies   = [c for c in data.get("cookies",   []) if _matches_domain(c.get("host", "").lstrip(".").removeprefix("www."), domain)]

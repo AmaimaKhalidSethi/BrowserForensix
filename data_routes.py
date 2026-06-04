@@ -151,7 +151,11 @@ def register_data_routes(app, load_analysis_fn, helpers: dict):
 
     @data_bp.route('/domain/<domain>')
     def api_domain(domain: str):
-        domain = _validate_domain_param(domain)
+        try:
+            domain = _validate_domain_param(domain)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        
         data = load_analysis_fn()
 
         def _matches(candidate: str) -> bool:

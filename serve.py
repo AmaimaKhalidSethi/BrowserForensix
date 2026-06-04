@@ -203,27 +203,13 @@ def _is_valid_domain(domain: str) -> bool:
 
 
 def _validate_domain_param(raw: str) -> str:
+    """Validate domain input. Raises ValueError if invalid."""
     domain = raw.lower().strip().removeprefix("www.")
     if not domain or len(domain) < 4 or len(domain) > 253:
-        from flask import make_response
-        resp = make_response(jsonify({"error": "Invalid domain: must be 4-253 characters."}), 400)
-        raise DomainValidationError(resp)
+        raise ValueError("Invalid domain: must be 4-253 characters.")
     if not _is_valid_domain(domain):
-        from flask import make_response
-        resp = make_response(jsonify({"error": "Invalid domain syntax."}), 400)
-        raise DomainValidationError(resp)
+        raise ValueError("Invalid domain syntax.")
     return domain
-
-
-class DomainValidationError(Exception):
-    """Raised by _validate_domain_param so callers get a JSON 400 response."""
-    def __init__(self, response):
-        self.response = response
-
-
-@app.errorhandler(DomainValidationError)
-def _handle_domain_error(exc):
-    return exc.response
 
 
 # Domain extraction and timestamp parsing live in analysis/sessions.py.
