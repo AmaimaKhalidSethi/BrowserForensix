@@ -284,4 +284,24 @@ def register_data_routes(app, load_analysis_fn, helpers: dict):
 
         return jsonify({"nodes": nodes, "edges": edges})
 
+    @data_bp.route('/localstorage')
+    def api_localstorage():
+        data = load_analysis_fn()
+        items = data.get("local_storage", [])
+        q = request.args.get("q", "").lower()
+        origin = request.args.get("origin", "").lower()
+        source = request.args.get("source", "").strip()
+        page = _safe_int(request.args.get("page", 1))
+
+        if q:
+            items = [i for i in items if q in i.get("key", "").lower()
+                     or q in i.get("value", "").lower()
+                     or q in i.get("origin", "").lower()]
+        if origin:
+            items = [i for i in items if origin in i.get("origin", "").lower()]
+        if source:
+            items = [i for i in items if i.get("source", "") == source]
+
+        return jsonify(paginate(items, page))
+
     app.register_blueprint(data_bp)
