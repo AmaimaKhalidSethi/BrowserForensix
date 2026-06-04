@@ -214,8 +214,8 @@ def _summarise_artifact(a: dict, atype: str) -> dict:
         }
     if atype == "localstorage":
         return {
-            "label":      a.get("key", ""),
-            "title":      a.get("origin", ""),
+            "label":      f"{a.get('key','')} @ {a.get('origin','')}",
+            "title":      a.get("source", ""),
             "time":       "",
             "risk_score": 0,
         }

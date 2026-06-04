@@ -136,8 +136,8 @@ def run() -> None:
         + [c["risk_score"] for c in scored_cookies]
         + [d["risk_score"] for d in scored_downloads]
     )
-    moderate  = sum(1 for s in all_scores if 31 <= s <= 60)
     flagged   = sum(1 for s in all_scores if s >= 61)
+    moderate  = sum(1 for s in all_scores if 31 <= s <= 60)
     avg_score = round(statistics.mean(all_scores), 1) if all_scores else 0.0
 
     domain_visits:   Dict[str, int] = defaultdict(int)

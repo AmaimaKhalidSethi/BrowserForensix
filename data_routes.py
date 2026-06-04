@@ -151,11 +151,13 @@ def register_data_routes(app, load_analysis_fn, helpers: dict):
 
     @data_bp.route('/domain/<domain>')
     def api_domain(domain: str):
-        try:
-            domain = _validate_domain_param(domain)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-        
+        domain = domain.lower().strip().removeprefix("www.")
+        if not domain or len(domain) < 4 or len(domain) > 253:
+            return jsonify({"error": "Invalid domain: must be 4–253 characters"}), 400
+        import re as _re
+        _LABEL = _re.compile(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$')
+        if not all(_LABEL.match(lbl) for lbl in domain.rstrip(".").split(".")):
+            return jsonify({"error": "Invalid domain syntax"}), 400
         data = load_analysis_fn()
 
         def _matches(candidate: str) -> bool:

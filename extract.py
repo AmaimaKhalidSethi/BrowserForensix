@@ -34,11 +34,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-try:
-    from leveldb_reader import read_all_storage as _read_storage
-    _LEVELDB_OK = True
-except ImportError:
-    _LEVELDB_OK = False
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -622,6 +617,13 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
         "local_storage": [],
     }
 
+    try:
+        from leveldb_reader import read_all_storage as _read_ls
+        _LEVELDB_OK = True
+    except ImportError:
+        _LEVELDB_OK = False
+        log.info("leveldb_reader not available — localStorage extraction skipped")
+
     # ── Cookie decryptor (v10/v11 — Chrome <127, macOS, Linux, CTF profiles) ──
     # Import here so missing 'cryptography' package doesn't break extraction.
     # Gracefully falls back to [ENCRYPTED] if key cannot be resolved.
@@ -680,15 +682,15 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
             evidence["cookies"]   += extract_chrome_cookies(profile, label, _cookie_decryptor)
             evidence["bookmarks"] += extract_chrome_bookmarks(profile, label)
             evidence["downloads"] += extract_chrome_downloads(profile, label)
-            try:
-                from leveldb_reader import read_all_storage as _read_ls
-                ls = _read_ls(profile)
-                for entry in ls:
-                    entry["profile"] = label
-                evidence["local_storage"] += ls
-                log.info(f"{label} localStorage: {len(ls)} entries")
-            except Exception as _e:
-                log.warning(f"{label} localStorage read failed: {_e}")
+            if _LEVELDB_OK:
+                try:
+                    ls_entries = _read_ls(profile)
+                    for entry in ls_entries:
+                        entry["profile"] = label
+                    evidence["local_storage"] += ls_entries
+                    log.info(f"{label} localStorage: {len(ls_entries)} entries")
+                except Exception as _ls_err:
+                    log.warning(f"{label} localStorage read failed: {_ls_err}")
 
             # NOTE: History DB is copied once inside each extractor. Both history
             # and downloads extractors copy it independently for snapshot consistency.
@@ -736,7 +738,7 @@ def run(browser: str, profile_path: Optional[str] = None, cookie_key: Optional[s
         log.warning("Safari extraction: basic stub. Full plist/binary cookie parsing not yet implemented.")
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads"))
+    total = sum(len(evidence[k]) for k in ("history", "cookies", "bookmarks", "downloads", "local_storage"))
     evidence["meta"]["total_artifacts"] = total
     evidence["meta"]["profile_path"] = (
         ", ".join(p["path"] for p in evidence["meta"]["profiles_extracted"])
