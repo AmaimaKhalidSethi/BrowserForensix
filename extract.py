@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""
-BrowserForensix — extract.py
-Extracts browser artifacts from Chrome, Firefox, Edge, Safari.
-
-Fix 1: Discovers ALL Chrome profile directories (Default, Profile 1, Profile 2 …)
-        and merges their artifacts into evidence.json — one run extracts all
-        Google accounts, not just the first one.
-
-Fix 2: History query now joins urls + visits tables so every individual visit
-        has its own precise timestamp, not just the aggregate last_visit_time
-        from urls. This is why data appeared "3 days old" — the urls table
-        only updates its last_visit_time when Chrome checkpoints the WAL
-        (often on close). The visits table records each visit as it happens,
-        and the WAL copy captures those too.
-
-Fix 3: WAL snapshot — when Chrome is open, copies both History and History-wal
-        into a temp location and opens with immutable=0 so SQLite merges the
-        WAL in-process. This picks up visits from the last few minutes even if
-        Chrome has not been closed.
-"""
 
 import os
 import sys
@@ -579,8 +559,9 @@ def _profile_label(profile: Path, account_names: Optional[Dict[str, str]] = None
     if prefs_file.exists():
         try:
             prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+            account_info = prefs.get("account_info", [])
             account = (
-                prefs.get("account_info", [{}])[0].get("email")
+                account_info[0].get("email") if account_info else None
                 or prefs.get("signin", {}).get("allowed_username")
                 or prefs.get("profile", {}).get("name")
             )

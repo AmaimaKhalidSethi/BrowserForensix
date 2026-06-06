@@ -22,3 +22,5 @@ flask-limiter>=2.0.0       # rate limiting for AI routes
 
 # Development / verification
 pytest>=8.0.0              # test suite for forensic logic and route filters
+
+python-snappy>=0.7.3       # Snappy decompression for LevelDB SST blocks (optional)
