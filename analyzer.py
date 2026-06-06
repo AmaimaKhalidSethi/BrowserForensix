@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-BrowserForensix — analyzer.py
-Scores and annotates all browser artifacts, writes analysis.json.
-
-FIX-10: analysis.json is now written atomically via a temp file + os.replace().
-         Previously ANALYSIS_FILE.write_text() wrote directly, so a concurrent
-         load_analysis() call could read a torn/partial JSON file and crash with
-         JSONDecodeError. os.replace() is atomic on all POSIX systems and on
-         Windows (same volume), so readers always see a complete file.
-"""
-
 import json
 import os
 import statistics
@@ -68,7 +57,7 @@ def run() -> None:
             break
         except json.JSONDecodeError as e:
             if attempt < 2:
-                time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                time.sleep(0.1 * 2**attempt)  # Exponential backoff
             else:
                 raise RuntimeError(f"Failed to load {EVIDENCE_FILE} after 3 attempts: {e}") from e
     history:   List[Dict] = evidence.get("history",   [])
