@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""
-BrowserForensix — decryptor.py
-Chrome AES-256-GCM cookie decryption.
-
-Chrome 80+ encrypts cookie values with AES-256-GCM. The AES key is stored
-in Local State as os_crypt.encrypted_key, itself wrapped with the OS
-credential store (DPAPI on Windows, Keychain on macOS, fixed passphrase
-on Linux).
-
-This module is imported by extract.py. It never modifies browser data.
-All decryption is read-only and operates on copied bytes already in memory.
-
-Usage in extract.py:
-    from decryptor import CookieDecryptor
-    decryptor = CookieDecryptor(user_data_path, cookie_key_hex=args.cookie_key)
-    plaintext = decryptor.decrypt(encrypted_value_bytes)
-
-Fallback chain (each step tried silently, never raises):
-  1. --cookie-key hex argument (CTF / offline use)
-  2. Local State encrypted_key + OS unwrap (DPAPI / Keychain / Linux)
-  3. Legacy Chrome < 80 plaintext (no encryption, just return as-is)
-  4. Return None  → caller keeps "[ENCRYPTED]"
-"""
 
 import os
 import sys
@@ -218,35 +195,6 @@ def _unwrap_from_local_state(local_state_path: Path) -> Optional[bytes]:
         return _unwrap_macos(b64_key)
     elif os_name == "Linux":
         return _unwrap_linux()
-    return None
-
-
-# ── macOS legacy AES-CBC (Chrome < 80 on macOS) ───────────────────────────────
-
-def _decrypt_cbc(key: bytes, ciphertext: bytes) -> Optional[bytes]:
-    """
-    Chrome < 80 on macOS/Linux used AES-128-CBC with a fixed IV of 16 spaces.
-    ciphertext has a 3-byte version prefix (v10) already stripped by caller.
-    """
-    iv = b" " * 16
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives import padding as _padding
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-        dec = cipher.decryptor()
-        raw = dec.update(ciphertext) + dec.finalize()
-        # PKCS7 unpad
-        unpadder = _padding.PKCS7(128).unpadder()
-        return unpadder.update(raw) + unpadder.finalize()
-    except ImportError:
-        pass
-    try:
-        from Crypto.Cipher import AES  # type: ignore
-        from Crypto.Util.Padding import unpad
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        return unpad(cipher.decrypt(ciphertext), 16)
-    except ImportError:
-        pass
     return None
 
 
