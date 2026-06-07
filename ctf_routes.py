@@ -52,6 +52,8 @@ def _get_custom_pattern(custom_re: str):
     if len(custom_re) > _MAX_CUSTOM_PATTERN_LEN:
         return None
     if custom_re not in _custom_pattern_cache:
+        if len(_custom_pattern_cache) > 200:
+            _custom_pattern_cache.clear()
         try:
             _custom_pattern_cache[custom_re] = re.compile(custom_re, re.IGNORECASE)
         except re.error:
