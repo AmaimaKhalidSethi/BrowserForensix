@@ -561,7 +561,7 @@ def _profile_label(profile: Path, account_names: Optional[Dict[str, str]] = None
             prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
             account_info = prefs.get("account_info", [])
             account = (
-                account_info[0].get("email") if account_info else None
+                (account_info[0].get("email") if account_info else None)
                 or prefs.get("signin", {}).get("allowed_username")
                 or prefs.get("profile", {}).get("name")
             )
