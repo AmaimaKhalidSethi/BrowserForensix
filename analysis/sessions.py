@@ -2,12 +2,8 @@
 
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
-
-def domain_of(url: str) -> str:
-    netloc = urlparse(url).netloc.lower().split(":")[0]
-    return netloc.removeprefix("www.")
+from analysis.anomalies import extract_domain as domain_of
 
 
 def norm_dt(ts: str) -> "datetime | None":
