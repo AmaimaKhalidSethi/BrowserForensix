@@ -83,6 +83,10 @@ def _set_csp(response):
 
     The app uses no external scripts except cdnjs; reflect that here.
     Includes script-src, style-src, connect-src, and frame-ancestors 'none'.
+
+    NOTE: 'unsafe-inline' is used because inline scripts/styles are needed
+    in templates. Since this is a localhost-only tool, this is an acceptable
+    tradeoff and carries lower risk than in a public-facing application.
     """
     csp = (
         "default-src 'self'; "
@@ -498,52 +502,13 @@ def api_diff():
     })
 
 
-@app.route('/api/localstorage')
-def api_localstorage():
-    data  = analysis_cache.get()
-    items = data.get("local_storage", [])
-    q      = request.args.get("q",      "").lower()
-    origin = request.args.get("origin", "").strip().lower()
-    source = request.args.get("source", "").strip()
-    page   = _safe_int(request.args.get("page", 1))
-    per    = _safe_int(request.args.get("per_page", 50))
-
-    if q:
-        items = [i for i in items if q in i.get("key",   "").lower()
-                 or q in i.get("value", "").lower()
-                 or q in i.get("origin","").lower()]
-    if origin:
-        items = [i for i in items if origin in i.get("origin", "").lower()]
-    if source:
-        items = [i for i in items if i.get("source", "") == source]
-
-    return jsonify(paginate(items, page, per))
-
-
 @app.route('/api/ghost_domains')
 def api_ghost_domains():
-    """Return domains that have cookies but no history entries.
-
-    For each domain include cookie names and creation timestamps.
-    """
     data = analysis_cache.get()
-    cookies = data.get('cookies', [])
-    history = data.get('history', [])
-    hist_domains = set(domain_of(h.get('url','')) for h in history if h.get('url'))
-    by_domain = {}
-    for c in cookies:
-        host = (c.get('host') or '').lstrip('.')
-        dom = host
-        if dom not in by_domain:
-            by_domain[dom] = []
-        by_domain[dom].append({'name': c.get('name'), 'created': c.get('created')})
-
-    ghosts = []
-    for dom, cs in by_domain.items():
-        if dom and dom not in hist_domains:
-            ghosts.append({'domain': dom, 'cookies': cs})
-
-    return jsonify({'ghosts': ghosts})
+    gap = next((a for a in data.get("anomalies", []) if a.get("type") == "history_gap"), None)
+    if not gap:
+        return jsonify({"ghosts": []})
+    return jsonify({"ghosts": [{"domain": d} for d in gap.get("affected_domains", [])]})
 
 
 # Graph API moved to data_routes.py blueprint
