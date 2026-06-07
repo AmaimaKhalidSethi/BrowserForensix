@@ -369,10 +369,11 @@ Write a 2-3 paragraph narrative describing:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ai_download_threat(download: dict, all_downloads: list) -> dict:
-    src_domain = download.get("source_url", "")
+    from urllib.parse import urlparse as _urlparse
+    src_domain = _urlparse(download.get("source_url", "")).netloc
     related = [d for d in all_downloads
                if d.get("source_url","") != download.get("source_url","")
-               and any(p in d.get("source_url","") for p in src_domain.split(".")[-2:])][:3]
+               and src_domain and src_domain in d.get("source_url","")][:3]
 
     user_prompt = f"""Assess this browser download for forensic significance:
 
@@ -545,7 +546,8 @@ the data, say so clearly. Keep responses focused and investigatively useful."""
 def check_connection() -> dict:
     """Verify API key is set and OpenRouter is reachable."""
     try:
-        _api_key()
+        if not _API_KEYS:
+            raise EnvironmentError("No OPENROUTER API keys found.")
         result = _post({
             "messages": [{"role": "user", "content": "Reply with only the word: OK"}],
             "max_tokens": 5,
