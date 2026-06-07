@@ -77,7 +77,7 @@ def detect_history_gaps(history: List[Dict], cookies: List[Dict]) -> Optional[Di
 
 def detect_burst_activity(
     history: List[Dict],
-    burst_threshold: int = 20,
+    burst_threshold: int = 8,
     window_minutes: int = 5,
 ) -> List[Dict]:
     timestamped = []
@@ -88,26 +88,36 @@ def detect_burst_activity(
     timestamped.sort(key=lambda x: x[0])
 
     anomalies = []
-    for i, (t0, _) in enumerate(timestamped):
-        window = [
-            h for (t, h) in timestamped[i:]
-            if (t - t0).total_seconds() <= window_minutes * 60
-        ]
-        if len(window) >= burst_threshold:
-            domains = list({extract_domain(h.get("url", "")) for h in window})
-            anomalies.append({
-                "type": "burst_activity",
-                "severity": "moderate",
-                "title": f"Burst Activity - {len(window)} URLs in {window_minutes} min",
-                "description": (
-                    f"{len(window)} history entries recorded within {window_minutes} minutes "
-                    f"starting {t0.isoformat()}. Domains: {', '.join(domains[:5])}"
-                ),
-                "start_time": t0.isoformat(),
-                "url_count": len(window),
-                "domains": domains[:10],
-            })
+    seen_windows = set()
 
+    # Group by domain first
+    from collections import defaultdict
+    by_domain = defaultdict(list)
+    for dt, h in timestamped:
+        d = extract_domain(h.get("url", ""))
+        if d:
+            by_domain[d].append((dt, h))
+
+    for domain, entries in by_domain.items():
+        for i, (t0, _) in enumerate(entries):
+            window = [h for (t, h) in entries[i:]
+                      if (t - t0).total_seconds() <= window_minutes * 60]
+            if len(window) >= burst_threshold:
+                key = (domain, t0.isoformat())
+                if key not in seen_windows:
+                    seen_windows.add(key)
+                    anomalies.append({
+                        "type": "burst_activity",
+                        "severity": "moderate",
+                        "title": f"Burst Activity - {len(window)} visits to {domain} in {window_minutes} min",
+                        "description": (
+                            f"{len(window)} visits to {domain} within {window_minutes} minutes "
+                            f"starting {t0.isoformat()}."
+                        ),
+                        "start_time": t0.isoformat(),
+                        "url_count": len(window),
+                        "domains": [domain],
+                    })
     return anomalies
 
 
