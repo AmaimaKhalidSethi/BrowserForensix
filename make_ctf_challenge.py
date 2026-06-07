@@ -48,9 +48,8 @@ ANALYSIS_FILE = OUT_DIR / "analysis.json"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ts(days_ago=0, hour=10, minute=0):
-    """Return ISO timestamp string."""
-    dt = datetime(2024, 11, 15, hour, minute, 0, tzinfo=timezone.utc) - timedelta(days=days_ago)
-    return dt.isoformat()
+    base = datetime.now(timezone.utc).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return (base - timedelta(days=days_ago)).isoformat()
 
 def b64(s): return base64.b64encode(s.encode()).decode()
 def to_hex(s): return s.encode().hex()
