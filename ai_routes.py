@@ -115,8 +115,6 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
             return jsonify(ai.ai_executive_summary(data))
         except HTTPException as e:
             return _err(e.description, e.code or 400)
-        except HTTPException as e:
-            return _err(e.description, e.code or 400)
         except Exception as e:
             return _err(str(e))
 
