@@ -65,7 +65,7 @@ def score_url(
     path = parsed.path.lower()
 
     if url.startswith("http://") and not _IP_RE.match(host):
-        score += 5
+        score += 20
         reasons.append("plain HTTP")
 
     if _IP_RE.match(host):
@@ -86,7 +86,7 @@ def score_url(
             break
 
     dt = _parse_iso(last_visit)
-    if dt and 2 <= dt.hour < 5:
+    if dt and (dt.hour >= 23 or dt.hour < 5):
         score += 10
         reasons.append("off-hours visit (2-5am UTC)")
 
@@ -109,7 +109,7 @@ def classify_cookie(cookie: dict) -> str:
         return "Auth Token"
 
     track_names = {
-        "_ga", "_gid", "_fbp", "_fbc", "__utma", "__utmz", "fr", "_gcl_au",
+        "_fbp", "_fbc", "__utma", "__utmz", "fr", "_gcl_au",
         "mp_", "ajs_", "hubspot", "intercom", "mixpanel",
     }
     if any(name.startswith(track_name) for track_name in track_names):
@@ -151,6 +151,10 @@ def score_cookie(cookie: dict, history_count: int) -> Tuple[int, List[str]]:
     if exp_dt and exp_dt < _now_utc():
         score += 5
         reasons.append("expired (zombie) cookie")
+
+    if exp_dt and (exp_dt - _now_utc()).days > 365:
+        score += 15
+        reasons.append("cookie lifetime > 365 days")
 
     for keyword in _SUSPICIOUS_KEYWORDS:
         if keyword in host:
