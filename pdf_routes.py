@@ -64,11 +64,6 @@ def register_pdf_routes(app, load_analysis_fn):
     C_WHITE   = colors.white
     C_OFFWHITE= colors.HexColor("#F5F3FF")
 
-    def _risk_color(score):
-        if score >= 61: return C_RED
-        if score >= 31: return C_AMBER
-        return C_GREEN
-
     def _styles():
         base = getSampleStyleSheet()
 
@@ -283,7 +278,7 @@ def register_pdf_routes(app, load_analysis_fn):
                     Paragraph((h.get("url") or "")[:75], S["mono"]),
                     Paragraph((h.get("last_visit") or "")[:16].replace("T", " "), S["mono"]),
                 ])
-            t = Table(rows, colWidths=[1*cm, 9*cm, 3.5*cm - 0.5*cm])
+            t = Table(rows, colWidths=[1*cm, W - 4.5*cm, 3.5*cm])
             t.setStyle(_table_style_base())
             story.append(t)
             story.append(Spacer(1, 0.2*cm))
@@ -303,7 +298,7 @@ def register_pdf_routes(app, load_analysis_fn):
                     Paragraph("Yes" if d.get("file_exists") else "NO", S["body"]),
                     Paragraph((d.get("start_time") or "")[:10],  S["mono"]),
                 ])
-            t = Table(rows, colWidths=[1*cm, 3.8*cm, 4.2*cm, 1.5*cm, 2.5*cm - 1*cm])
+            t = Table(rows, colWidths=[1*cm, 3.8*cm, W - 9*cm, 1.5*cm, 2.5*cm])
             t.setStyle(_table_style_base())
             story.append(t)
         else:
@@ -324,7 +319,7 @@ def register_pdf_routes(app, load_analysis_fn):
                     Paragraph(c.get("type") or "Unknown",  S["body"]),
                     Paragraph((c.get("expires") or "Session")[:10], S["mono"]),
                 ])
-            t = Table(rows, colWidths=[1*cm, 4*cm, 3.5*cm, 2.5*cm, 3*cm - 1*cm])
+            t = Table(rows, colWidths=[1*cm, 4*cm, 3.5*cm, 2.5*cm, W - 11*cm])
             t.setStyle(_table_style_base())
             story.append(t)
         else:
