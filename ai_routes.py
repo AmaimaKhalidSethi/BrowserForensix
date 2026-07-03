@@ -200,10 +200,6 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
         except Exception as e:
             return _err(str(e))
 
-    # Apply stricter rate limit for streaming endpoints (3/minute) if limiter present
-    if limiter is not None:
-        ai_stream_session = limiter.limit("3 per minute")(ai_stream_session)
-
     # ── Download threat assessment ────────────────────────────────────────────
 
     @ai_bp.route("/explain/download")
@@ -296,9 +292,6 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
         except Exception as e:
             return _err(str(e))
 
-    if limiter is not None:
-        ai_stream_report = limiter.limit("3 per minute")(ai_stream_report)
-
     # ── Freeform AI chat (streaming) ──────────────────────────────────────────
 
     @ai_bp.route("/stream/chat", methods=["POST"])
@@ -326,6 +319,8 @@ def register_ai_routes(app, load_analysis_fn, helpers: dict):
             return _err(str(e))
 
     if limiter is not None:
+        ai_stream_session = limiter.limit("3 per minute")(ai_stream_session)
+        ai_stream_report = limiter.limit("3 per minute")(ai_stream_report)
         ai_stream_chat = limiter.limit("3 per minute")(ai_stream_chat)
 
     app.register_blueprint(ai_bp)
