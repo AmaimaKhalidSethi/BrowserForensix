@@ -6,6 +6,9 @@ Register with: register_data_routes(app, load_analysis_fn, helpers)
 where helpers is a dict containing helper functions used by these routes.
 """
 import json
+import csv
+import io
+import re
 from flask import Blueprint, jsonify, request
 
 data_bp = Blueprint("data", __name__, url_prefix="/api")
@@ -21,7 +24,16 @@ def register_data_routes(app, load_analysis_fn, helpers: dict):
     _safe_int = helpers.get("_safe_int")
     _validate_domain_param = helpers.get("_validate_domain_param")
 
+    # Helper to detect sensitive data
+    def is_sensitive(item):
+        email_regex = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+        phone_regex = re.compile(r"\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b")
+        cc_regex = re.compile(r"\\b(?:\\d[ -]*?){13,16}\\b")
+        text = f"{item.get('url', '')} {item.get('title', '')}".lower()
+        return bool(email_regex.search(text) or phone_regex.search(text) or cc_regex.search(text))
+
     @data_bp.route('/history')
+    @data_bp.route('/export/history')
     def api_history():
         data = load_analysis_fn()
         items = data.get("history", [])
@@ -56,6 +68,34 @@ def register_data_routes(app, load_analysis_fn, helpers: dict):
                 return True
 
             items = [i for i in items if _in_range(i)]
+
+        # Add sensitive flag to each item
+        for i in items:
+            i["sensitive"] = is_sensitive(i)
+
+        # If CSV export requested
+        if request.path.endswith('/export/history'):
+            # Generate CSV
+            output = io.StringIO()
+            writer = csv.writer(output)
+            header = ["url", "title", "visit_count", "last_visit", "risk_score", "sensitive"]
+            writer.writerow(header)
+            for i in items:
+                writer.writerow([
+                    i.get("url", ""),
+                    i.get("title", ""),
+                    i.get("visit_count", 1),
+                    i.get("last_visit", ""),
+                    i.get("risk_score", 0),
+                    i.get("sensitive", False)
+                ])
+            csv_data = output.getvalue()
+            output.close()
+            return app.response_class(
+                csv_data,
+                mimetype='text/csv',
+                headers={"Content-Disposition": "attachment;filename=history_export.csv"}
+            )
 
         return jsonify(paginate(items, page))
 
